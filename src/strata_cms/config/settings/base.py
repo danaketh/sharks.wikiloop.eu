@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "strata_cms.infrastructure.plugins.apps.StrataCoreConfig",
     "strata_cms.infrastructure.persistence.django.apps.StrataPersistenceConfig",
     "strata_cms.admin.apps.StrataAdminConfig",
+    "strata_cms.contrib.rich_text.apps.RichTextPluginConfig",
 ]
 
 MIDDLEWARE = [

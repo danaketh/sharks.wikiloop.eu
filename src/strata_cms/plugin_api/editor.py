@@ -16,6 +16,7 @@ class EditorInputKind(StrEnum):
 
     TEXT = "text"
     TEXTAREA = "textarea"
+    MARKDOWN = "markdown"
     SLUG = "slug"
     EMAIL = "email"
     URL = "url"

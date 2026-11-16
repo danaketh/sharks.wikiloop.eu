@@ -46,6 +46,14 @@ from strata_cms.plugin_api.errors import (
     UnsupportedSchemaVersionError,
 )
 from strata_cms.plugin_api.keys import PluginKey
+from strata_cms.plugin_api.markdown import (
+    DEFAULT_MARKDOWN_PROFILE,
+    MarkdownProfile,
+    MarkdownText,
+    normalize_markdown,
+    render_markdown_preview,
+    validate_markdown,
+)
 from strata_cms.plugin_api.migrations import SchemaMigration, SchemaMigrationSet
 from strata_cms.plugin_api.registry import (
     STRATA_PLUGIN_API_VERSION,
@@ -61,6 +69,7 @@ from strata_cms.plugin_api.schema import (
 )
 
 __all__ = [
+    "DEFAULT_MARKDOWN_PROFILE",
     "MAX_BLOCK_NESTING_DEPTH",
     "STRATA_PLUGIN_API_VERSION",
     "BlockCollection",
@@ -92,6 +101,8 @@ __all__ = [
     "EncodedContent",
     "InvalidBlockEnvelopeError",
     "InvalidSchemaMigrationError",
+    "MarkdownProfile",
+    "MarkdownText",
     "PluginAPIError",
     "PluginDefinition",
     "PluginKey",
@@ -109,4 +120,7 @@ __all__ = [
     "UnknownBlockReferenceError",
     "UnsupportedSchemaVersionError",
     "ValidationIssue",
+    "normalize_markdown",
+    "render_markdown_preview",
+    "validate_markdown",
 ]

@@ -14,6 +14,7 @@ dependencies = [
   "gunicorn>=23,<27",
   "whitenoise>=6.9,<7",
   "packaging>=25,<27",
+  "markdown-it-py>=4.2,<5",
 ]
 
 [dependency-groups]
@@ -229,6 +230,7 @@ source_modules = [
   "strata_cms.plugin_api.editor",
   "strata_cms.plugin_api.errors",
   "strata_cms.plugin_api.keys",
+  "strata_cms.plugin_api.markdown",
   "strata_cms.plugin_api.migrations",
   "strata_cms.plugin_api.registry",
   "strata_cms.plugin_api.schema",
