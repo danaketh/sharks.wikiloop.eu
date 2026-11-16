@@ -193,6 +193,15 @@ class FakeProjections:
             RecordedRevision(content_id, revision_id, type_key, title, links)
         )
 
+    def record_blob_usage(
+        self,
+        *,
+        content_id: ContentId,
+        revision_id: RevisionId,
+        blob_ids: frozenset[UUID],
+    ) -> None:
+        del content_id, revision_id, blob_ids
+
     def set_archived(self, content_id: ContentId, archived: bool) -> None:
         self.archived[content_id] = archived
 

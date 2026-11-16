@@ -48,6 +48,16 @@ class ContentProjectionWriter(Protocol):
         """Upsert the title, replace draft references, append blob usage."""
         ...  # pragma: no cover - protocol declaration
 
+    def record_blob_usage(
+        self,
+        *,
+        content_id: ContentId,
+        revision_id: RevisionId,
+        blob_ids: frozenset[UUID],
+    ) -> None:
+        """Append blob usage only; fails if a blob no longer exists."""
+        ...  # pragma: no cover - protocol declaration
+
     def set_archived(self, content_id: ContentId, archived: bool) -> None:
         """Mirror the content's archived flag into the title projection."""
         ...  # pragma: no cover - protocol declaration

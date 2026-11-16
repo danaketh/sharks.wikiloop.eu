@@ -93,8 +93,9 @@ class FakeBlobs:
         del created_before, limit
         return ()
 
-    def delete(self, blob_id: UUID) -> None:
+    def delete_if_unused(self, blob_id: UUID) -> bool:
         del blob_id
+        return False
 
 
 def _upload(

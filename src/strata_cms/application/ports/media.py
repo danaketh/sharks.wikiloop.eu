@@ -65,6 +65,11 @@ class MediaBlobRepository(Protocol):
         """Return up to ``limit`` unused blobs created before the cutoff."""
         ...  # pragma: no cover - protocol declaration
 
-    def delete(self, blob_id: UUID) -> None:
-        """Delete one blob's metadata; a missing blob is not an error."""
+    def delete_if_unused(self, blob_id: UUID) -> bool:
+        """Atomically delete one blob's metadata only while no revision uses it.
+
+        Returns whether a row was deleted; a used or missing blob is kept/no-op.
+        Implementations must serialize with concurrent blob-usage writes so a
+        revision committed meanwhile is never left pointing at a deleted blob.
+        """
         ...  # pragma: no cover - protocol declaration

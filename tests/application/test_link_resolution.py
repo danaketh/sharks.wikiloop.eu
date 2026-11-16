@@ -181,8 +181,8 @@ class FakeBlobs:
         del created_before, limit
         return ()
 
-    def delete(self, blob_id: UUID) -> None:
-        self.blobs.pop(blob_id, None)
+    def delete_if_unused(self, blob_id: UUID) -> bool:
+        return self.blobs.pop(blob_id, None) is not None
 
 
 class FakeFiles:

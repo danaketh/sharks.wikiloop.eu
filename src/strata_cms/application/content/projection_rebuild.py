@@ -8,14 +8,19 @@ inside one Unit of Work, so readers see either the old or the new projection.
 Links whose target content or blob no longer exists are skipped and reported
 (never fabricated), and revisions that the installed content types can no
 longer decode are skipped and reported, so one bad item never aborts the run.
+Blob usage of such skipped revisions is still recorded from a schema-agnostic
+scan of the stored JSON: orphan blob cleanup trusts these rows, so dropping
+them would delete files that stored revisions still link to.
 """
 
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
+from strata_cms.application.content.links import BLOB_KEY
 from strata_cms.application.errors import (
     ContentTypeUnavailableError,
     InvalidContentDataError,
@@ -130,6 +135,7 @@ def _rebuild_draft_history(
             title = content_types.summary_title(revision) if is_latest else None
         except (InvalidContentDataError, ContentTypeUnavailableError) as exc:
             progress.skipped_revisions.append(_skipped_revision("draft", revision, exc))
+            _retain_stored_blob_usage(uow, revision)
             continue
         references = (
             _existing_references("draft", uow.targets, revision, links, progress)
@@ -148,6 +154,38 @@ def _rebuild_draft_history(
         recorded = True
     if recorded and history.archived:
         uow.projections.set_archived(history.content_id, True)
+
+
+def _retain_stored_blob_usage(
+    uow: ProjectionRebuildUnitOfWork,
+    revision: Revision,
+) -> None:
+    """Record usage for every existing blob linked anywhere in stored JSON."""
+    stored = _stored_blob_ids(revision.data.as_dict())
+    existing = uow.targets.existing_blobs(stored) if stored else frozenset()
+    if existing:
+        uow.projections.record_blob_usage(
+            content_id=revision.content_id,
+            revision_id=revision.id,
+            blob_ids=existing,
+        )
+
+
+def _stored_blob_ids(value: object) -> frozenset[UUID]:
+    """Collect UUIDs of every ``$blob`` key at any depth (over-retains safely)."""
+    found: set[UUID] = set()
+    pending: list[object] = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            raw = current.get(BLOB_KEY)
+            if isinstance(raw, str):
+                with suppress(ValueError):
+                    found.add(UUID(raw))
+            pending.extend(current.values())
+        elif isinstance(current, list):
+            pending.extend(current)
+    return frozenset(found)
 
 
 def _rebuild_published(

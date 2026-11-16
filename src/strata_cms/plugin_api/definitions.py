@@ -172,7 +172,7 @@ class ContentTypeDefinition[T]:
         """Decode and validate data already normalized to the current schema."""
         try:
             value = self.schema.deserialize(data)
-        except SchemaDecodeError:
+        except (SchemaDecodeError, ContentValidationError):
             raise
         except (TypeError, ValueError, KeyError) as exc:
             raise SchemaDecodeError(

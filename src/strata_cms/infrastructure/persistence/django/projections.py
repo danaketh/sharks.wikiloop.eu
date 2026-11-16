@@ -3,6 +3,8 @@
 from collections.abc import Mapping
 from uuid import UUID
 
+from django.db import connections
+
 from strata_cms.application.ports.clock import Clock
 from strata_cms.application.ports.content_types import ContentLinks
 from strata_cms.application.ports.links import LinkTarget
@@ -93,6 +95,39 @@ class DjangoContentProjectionWriter:
             },
         )
         self._replace_draft_references(content_id, revision_id, links)
+        self.record_blob_usage(
+            content_id=content_id,
+            revision_id=revision_id,
+            blob_ids=frozenset(link.target for link in links.blobs),
+        )
+
+    def record_blob_usage(
+        self,
+        *,
+        content_id: ContentId,
+        revision_id: RevisionId,
+        blob_ids: frozenset[UUID],
+    ) -> None:
+        """Lock the used blob rows, then append one usage row per blob.
+
+        The lock serializes with orphan cleanup (``delete_if_unused``): a blob
+        deleted after link validation fails this write instead of leaving a
+        revision pointing at a deleted blob.
+        """
+        if not blob_ids:
+            return
+        ordered = sorted(blob_ids)
+        features = connections[self._using].features
+        locked = set(
+            MediaBlobRecord.objects.using(self._using)
+            .select_for_update(no_key=features.has_select_for_no_key_update)
+            .filter(pk__in=ordered)
+            .order_by("pk")
+            .values_list("pk", flat=True)
+        )
+        missing = blob_ids - locked
+        if missing:
+            raise LookupError(f"Blobs {sorted(map(str, missing))} do not exist.")
         MediaBlobUsageRecord.objects.using(self._using).bulk_create(
             [
                 MediaBlobUsageRecord(
@@ -100,7 +135,7 @@ class DjangoContentProjectionWriter:
                     content_id=content_id,
                     revision_id=revision_id,
                 )
-                for blob_id in dict.fromkeys(link.target for link in links.blobs)
+                for blob_id in ordered
             ],
             ignore_conflicts=True,
         )

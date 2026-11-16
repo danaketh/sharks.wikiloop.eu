@@ -85,16 +85,23 @@ def test_list_orphans_excludes_used_and_recent_blobs_oldest_first() -> None:
 
 
 @pytest.mark.django_db
-def test_delete_removes_only_that_blob_and_is_idempotent() -> None:
+def test_delete_if_unused_removes_only_that_unused_blob() -> None:
     repository = DjangoMediaBlobRepository()
-    kept, removed = _blob(), _blob()
-    repository.add(kept)
-    repository.add(removed)
+    kept, removed, used = _blob(), _blob(), _blob()
+    for blob in (kept, removed, used):
+        repository.add(blob)
+    MediaBlobUsageRecord.objects.create(
+        blob_id=used.id, content_id=uuid4(), revision_id=uuid4()
+    )
 
-    repository.delete(removed.id)
-    repository.delete(removed.id)
+    assert repository.delete_if_unused(removed.id) is True
+    assert repository.delete_if_unused(removed.id) is False
+    assert repository.delete_if_unused(used.id) is False
 
-    assert set(MediaBlobRecord.objects.values_list("id", flat=True)) == {kept.id}
+    assert set(MediaBlobRecord.objects.values_list("id", flat=True)) == {
+        kept.id,
+        used.id,
+    }
 
 
 @pytest.mark.django_db

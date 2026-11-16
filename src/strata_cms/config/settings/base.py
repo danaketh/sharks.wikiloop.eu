@@ -1,5 +1,6 @@
 """Shared Django settings."""
 
+from datetime import timedelta
 from pathlib import Path
 
 import environ
@@ -27,6 +28,7 @@ INSTALLED_APPS = [
     "strata_cms.infrastructure.persistence.django.apps.StrataPersistenceConfig",
     "strata_cms.admin.apps.StrataAdminConfig",
     "strata_cms.contrib.rich_text.apps.RichTextPluginConfig",
+    "strata_cms.contrib.media.apps.MediaPluginConfig",
 ]
 
 MIDDLEWARE = [
@@ -90,7 +92,7 @@ STORAGES = {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"
     },
 }
-MEDIA_URL = "media/"
+MEDIA_URL = env.str("DJANGO_MEDIA_URL", default="media/")
 MEDIA_ROOT = env.str("DJANGO_MEDIA_ROOT", default=str(BASE_DIR / "media"))
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -98,6 +100,9 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # limit is checked from image headers before pixel data is decoded.
 STRATA_MEDIA_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 STRATA_MEDIA_MAX_IMAGE_PIXELS = 50_000_000
+# `strata_cleanup_media` only deletes unused blobs older than this, so a
+# fresh upload survives until the revision referencing it is saved.
+STRATA_MEDIA_ORPHAN_GRACE = timedelta(hours=24)
 
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [

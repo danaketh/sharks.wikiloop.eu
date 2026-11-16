@@ -495,6 +495,62 @@ def test_rebuild_reports_revisions_of_uninstalled_types(
     assert report.published_revisions == 1
 
 
+def test_rebuild_keeps_blob_usage_of_undecodable_revisions(
+    content_types: RegistryContentTypeService,
+) -> None:
+    """Orphan cleanup relies on usage rows; losing them would delete files."""
+    nested_blob, image_blob, missing_blob = _blob(), _blob(), uuid4()
+    orphan = _create(
+        content_types,
+        PROFILE,
+        {"name": "Orphan", "image": {"$blob": str(image_blob)}},
+    )
+    broken = RevisionRecord.objects.get(pk=orphan.revision_id)
+    broken.data = {
+        "name": "Orphan",
+        "image": {"$blob": str(image_blob)},
+        "body": [{"data": {"photo": {"$blob": str(nested_blob)}}}],
+        "gone": {"$blob": str(missing_blob)},
+        "noise": [{"$blob": "not-a-uuid"}, {"$blob": 3}],
+    }
+    broken.save(update_fields=["data"])
+    uninstalled = _create(
+        content_types, PROFILE, {"name": "Gone", "image": {"$blob": str(image_blob)}}
+    )
+    species_only = _species_only_service()
+
+    report = rebuild_projections(
+        RebuildScope.DRAFT,
+        new_uow=DjangoProjectionRebuildUnitOfWork,
+        content_types=species_only,
+    )
+
+    assert len(report.skipped_revisions) == 2
+    assert set(MediaBlobUsageRecord.objects.values_list("blob_id", "revision_id")) == {
+        (image_blob, orphan.revision_id),
+        (nested_blob, orphan.revision_id),
+        (image_blob, uninstalled.revision_id),
+    }
+    assert not ContentTitleRecord.objects.exists()
+
+
+def _species_only_service() -> RegistryContentTypeService:
+    builder = StrataRegistryBuilder()
+    plugin = PluginDefinition(
+        key=PluginKey("tests.rebuild"), version="1.0.0", requires_strata=">=0.1,<0.2"
+    )
+    builder.register_plugin(plugin)
+    builder.registrar_for(plugin.key).register_content_type(
+        ContentTypeDefinition(
+            key=SPECIES,
+            schema_version=1,
+            schema=_DictSchema(),
+            summary_title=lambda value: str(value.get("title", "")),
+        )
+    )
+    return RegistryContentTypeService(builder.build(strata_version="0.1.0"))
+
+
 def test_published_index_remove_keeps_rows_of_currently_published_source(
     content_types: RegistryContentTypeService,
 ) -> None:

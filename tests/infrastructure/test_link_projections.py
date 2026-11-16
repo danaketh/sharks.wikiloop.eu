@@ -310,6 +310,39 @@ def test_projection_write_rolls_back_with_failed_uow() -> None:
 
 
 @pytest.mark.django_db
+def test_blob_usage_write_rejects_blob_deleted_after_validation() -> None:
+    """Usage rows lock their blobs; a blob deleted meanwhile fails the write."""
+    kept, deleted = _blob(11), UUID(int=12)
+    links = ContentLinks(
+        references=(),
+        blobs=tuple(
+            ContentLink(
+                kind="blob",
+                location=f"blobs/{index}",
+                target=target,
+                allowed_types=frozenset(),
+                path=f"$.blobs[{index}]",
+            )
+            for index, target in enumerate((kept, deleted))
+        ),
+    )
+
+    with (
+        pytest.raises(LookupError, match=str(deleted)),
+        DjangoContentUnitOfWork(clock=FixedClock()) as uow,
+    ):
+        uow.projections.record_revision(
+            content_id=ContentId(UUID(int=900)),
+            revision_id=RevisionId(UUID(int=901)),
+            type_key=ARTICLE,
+            title="Never",
+            links=links,
+        )
+
+    assert not MediaBlobUsageRecord.objects.exists()
+
+
+@pytest.mark.django_db
 def test_title_projection_tracks_latest_draft_and_archival() -> None:
     created = _create({"title": "First"}, id_start=100)
     title = ContentTitleRecord.objects.get(pk=created.content_id)

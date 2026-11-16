@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from datetime import datetime
 from uuid import UUID
 
+from django.db import transaction
+
 from strata_cms.domain.media import MediaBlob
 from strata_cms.domain.value_objects import ActorId
 from strata_cms.infrastructure.persistence.django.models import (
@@ -69,6 +71,29 @@ class DjangoMediaBlobRepository:
         )
         return tuple(_to_entity(record) for record in records)
 
-    def delete(self, blob_id: UUID) -> None:
-        """Delete one blob row; a missing row is a no-op."""
-        MediaBlobRecord.objects.using(self._using).filter(pk=blob_id).delete()
+    def delete_if_unused(self, blob_id: UUID) -> bool:
+        """Lock the blob row, re-check usage and delete it in one transaction.
+
+        Usage writers lock referenced blob rows (see
+        ``DjangoContentProjectionWriter``), so a writer either commits its
+        usage row before this re-check sees it or finds the blob gone.
+        """
+        with transaction.atomic(using=self._using):
+            locked = list(
+                MediaBlobRecord.objects.using(self._using)
+                .select_for_update()
+                .filter(pk=blob_id)
+                .values_list("pk", flat=True)
+            )
+            if not locked:
+                return False
+            if (
+                MediaBlobUsageRecord.objects.using(self._using)
+                .filter(blob_id=blob_id)
+                .exists()
+            ):
+                return False
+            deleted, _ = (
+                MediaBlobRecord.objects.using(self._using).filter(pk=blob_id).delete()
+            )
+            return deleted > 0

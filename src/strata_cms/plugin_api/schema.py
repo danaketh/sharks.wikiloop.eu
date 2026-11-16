@@ -22,7 +22,12 @@ class ContentSchema[T](Protocol):
     value_type: type[T]
 
     def deserialize(self, data: RevisionData) -> T:
-        """Decode current-version JSON into a typed value."""
+        """Decode current-version JSON into a typed value.
+
+        Raise ``SchemaDecodeError`` for malformed JSON, or
+        ``ContentValidationError`` to report a missing required value as a
+        structured issue with its own code and path.
+        """
         ...  # pragma: no cover - protocol declaration
 
     def serialize(self, value: T) -> RevisionData:
