@@ -20,6 +20,7 @@ class ContentAction(Enum):
     PUBLISH = "publish"
     ARCHIVE = "archive"
     RESTORE = "restore"
+    UPLOAD_MEDIA = "upload_media"
 
 
 @dataclass(frozen=True, slots=True)

@@ -15,6 +15,7 @@ dependencies = [
   "whitenoise>=6.9,<7",
   "packaging>=25,<27",
   "markdown-it-py>=4.2,<5",
+  "pillow>=13,<14",
 ]
 
 [dependency-groups]
@@ -192,6 +193,7 @@ forbidden_modules = [
   "strata_cms.config",
   "django",
   "rest_framework",
+  "PIL",
 ]
 broken_contract_guidance = "Move framework/persistence code behind a domain/application-facing port and keep domain objects plain Python."
 
@@ -207,6 +209,7 @@ forbidden_modules = [
   "strata_cms.config",
   "django",
   "rest_framework",
+  "PIL",
 ]
 broken_contract_guidance = "Define or use an application port; concrete Django/provider adapters belong in strata_cms.infrastructure."
 

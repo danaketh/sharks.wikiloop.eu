@@ -3,9 +3,11 @@
 from dataclasses import asdict
 from uuid import UUID
 
+from django.core.files.uploadedfile import UploadedFile
 from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status
+from rest_framework.parsers import MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,6 +19,10 @@ from strata_cms.api.management.serializers import (
     ContentLifecycleSerializer,
     CreateContentSerializer,
     CreateRevisionSerializer,
+    ErrorDetailSerializer,
+    MediaBlobSerializer,
+    MediaBlobUploadSerializer,
+    MediaProblemSerializer,
     MoveRouteSerializer,
     PublishRevisionSerializer,
 )
@@ -49,7 +55,9 @@ from strata_cms.application.errors import (
     RouteHasChildrenError,
     RouteNotFoundError,
     SlugConflictError,
+    UnsupportedMediaError,
 )
+from strata_cms.application.media.use_cases import UploadMediaBlob, upload_media_blob
 from strata_cms.application.ports.authorization import ContentAction
 from strata_cms.application.routing.commands import AttachRoute, DetachRoute, MoveRoute
 from strata_cms.application.routing.results import RouteResult
@@ -65,7 +73,11 @@ from strata_cms.config.services import (
     get_content_type_service,
     get_editor_catalog,
     get_id_generator,
+    get_image_processor,
     get_link_target_queries,
+    get_media_blob_repository,
+    get_media_file_store,
+    get_media_max_upload_bytes,
     get_route_repository,
     new_content_uow,
     new_route_uow,
@@ -77,6 +89,7 @@ from strata_cms.domain.errors import (
     RevisionOwnershipError,
     RouteCycleError,
 )
+from strata_cms.domain.media import MediaBlob
 from strata_cms.domain.revision import Revision
 from strata_cms.domain.value_objects import ContentId, ContentTypeKey, RevisionId
 from strata_cms.infrastructure.authorization.actor import build_content_actor
@@ -601,6 +614,94 @@ class ContentRouteView(ManagementAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class MediaBlobUploadView(ManagementAPIView):
+    """Upload one image as a new immutable, content-addressed media blob."""
+
+    parser_classes = [MultiPartParser]
+
+    @extend_schema(
+        operation_id="v1_manage_media_blobs_create",
+        request={"multipart/form-data": MediaBlobUploadSerializer},
+        responses={
+            201: MediaBlobSerializer,
+            400: OpenApiResponse(
+                response=MediaProblemSerializer,
+                description=(
+                    "Upload rejected. `code` is stable; malformed form fields "
+                    "return DRF field errors instead."
+                ),
+            ),
+            403: OpenApiResponse(
+                response=ErrorDetailSerializer,
+                description="Missing staff status or upload permission.",
+            ),
+        },
+    )
+    def post(self, request: Request) -> Response:
+        """Sniff/validate the file, strip metadata unless preserving, store it.
+
+        Type is sniffed from content; the client filename and Content-Type are
+        ignored and the storage key is generated server-side.
+        """
+        # Authorize and size-gate on Content-Length before the multipart body is
+        # parsed: Django streams any file part over FILE_UPLOAD_MAX_MEMORY_SIZE
+        # to a temporary file, and DATA_UPLOAD_MAX_MEMORY_SIZE excludes files.
+        denied = _authorize(request, ContentAction.UPLOAD_MEDIA)
+        if denied is not None:
+            return denied
+        max_bytes = get_media_max_upload_bytes()
+        if _declared_body_size(request) > max_bytes + _MULTIPART_OVERHEAD_BYTES:
+            return _application_error(UnsupportedMediaError("media_too_large"))
+        serializer = MediaBlobUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        upload = serializer.validated_data["file"]
+        preserve_original = serializer.validated_data["preserve_original"]
+        if not isinstance(upload, UploadedFile) or not isinstance(
+            preserve_original, bool
+        ):
+            raise AssertionError("Serializer returned unexpected upload types.")
+        actor = build_content_actor(request.user)
+        try:
+            if upload.size is not None and upload.size > max_bytes:
+                raise UnsupportedMediaError("media_too_large")
+            upload.seek(0)
+            data = upload.read(max_bytes + 1)
+            blob = upload_media_blob(
+                UploadMediaBlob(
+                    actor_id=actor.id,
+                    data=data,
+                    preserve_original=preserve_original,
+                ),
+                processor=get_image_processor(),
+                files=get_media_file_store(),
+                blobs=get_media_blob_repository(),
+                ids=get_id_generator(),
+                clock=get_clock(),
+                policy=get_content_policy(),
+                actor=actor,
+                max_bytes=max_bytes,
+            )
+        except (UnsupportedMediaError, NotAuthorizedError) as exc:
+            return _application_error(exc)
+        return Response(_media_blob_result(blob), status=status.HTTP_201_CREATED)
+
+
+# Allowance for multipart boundaries/headers and the small form fields.
+_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
+
+def _declared_body_size(request: Request) -> int:
+    """Return the client-declared body length; absent/invalid counts as 0.
+
+    WSGI bodies are bounded by CONTENT_LENGTH, so an absent header means
+    Django reads no body; the post-parse size checks still apply.
+    """
+    try:
+        return max(int(request.META.get("CONTENT_LENGTH") or 0), 0)
+    except ValueError:
+        return 0
+
+
 def _authorize(request: Request, action: ContentAction) -> Response | None:
     """Return a 403 response when the actor may not perform a read action."""
     actor = build_content_actor(request.user)
@@ -638,6 +739,17 @@ def _route_result(result: RouteResult) -> dict[str, object]:
     }
 
 
+def _media_blob_result(blob: MediaBlob) -> dict[str, object]:
+    return {
+        "blob_id": str(blob.id),
+        "content_type": blob.content_type,
+        "size_bytes": blob.size_bytes,
+        "width": blob.width,
+        "height": blob.height,
+        "sha256": blob.sha256,
+    }
+
+
 def _application_error(error: Exception) -> Response:
     code: int
     if isinstance(
@@ -665,4 +777,6 @@ def _application_error(error: Exception) -> Response:
     payload: dict[str, object] = {"detail": public_error_detail(error)}
     if isinstance(error, (InvalidContentDataError, ContentNotReadyError)):
         payload["problems"] = [asdict(problem) for problem in error.problems]
+    if isinstance(error, UnsupportedMediaError):
+        payload["code"] = error.reason
     return Response(payload, status=code)

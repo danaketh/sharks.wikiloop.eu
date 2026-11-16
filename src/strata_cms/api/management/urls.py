@@ -13,6 +13,7 @@ from strata_cms.api.management.views import (
     ContentRouteView,
     ContentTypeDetailView,
     ContentTypeListView,
+    MediaBlobUploadView,
 )
 
 app_name = "management"
@@ -58,5 +59,10 @@ urlpatterns = [
         "content/<uuid:content_id>/route/",
         ContentRouteView.as_view(),
         name="content-route",
+    ),
+    path(
+        "media/blobs/",
+        MediaBlobUploadView.as_view(),
+        name="media-blob-upload",
     ),
 ]

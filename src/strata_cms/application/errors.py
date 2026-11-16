@@ -119,3 +119,27 @@ class RouteHasChildrenError(ApplicationError, ValueError):
         """Capture the non-empty route's content identity for presentation adapters."""
         super().__init__(f"Content '{content_id}' still has child routes.")
         self.content_id = content_id
+
+
+MEDIA_REJECTION_REASONS = frozenset(
+    {
+        "media_too_large",
+        "media_type_not_allowed",
+        "media_unreadable",
+        "media_too_many_pixels",
+    }
+)
+
+
+class UnsupportedMediaError(ApplicationError, ValueError):
+    """Raised when an uploaded media payload is rejected.
+
+    ``reason`` is one of `MEDIA_REJECTION_REASONS`: a stable, client-safe code.
+    """
+
+    def __init__(self, reason: str) -> None:
+        """Capture the stable rejection reason for presentation adapters."""
+        if reason not in MEDIA_REJECTION_REASONS:
+            raise ValueError(f"Unknown media rejection reason '{reason}'.")
+        super().__init__(f"Media rejected: {reason}.")
+        self.reason = reason

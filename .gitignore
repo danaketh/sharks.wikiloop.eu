@@ -17,6 +17,6 @@ htmlcov/
 dist/
 build/
 staticfiles/
-media/
+/media/
 openapi.yaml
 .DS_Store

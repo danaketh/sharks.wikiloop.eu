@@ -47,6 +47,7 @@ Production configuration must deliberately address:
 - Serve untrusted uploads with safe content disposition/types and preferably from a separate origin/object store.
 - Prevent path traversal and archive extraction outside the intended directory.
 - Consider decompression bombs, image/parser limits, and malicious file formats.
+- Deployments must set a reverse-proxy request body limit (e.g. nginx `client_max_body_size`) slightly above `STRATA_MEDIA_MAX_UPLOAD_BYTES`: Django streams file parts over `FILE_UPLOAD_MAX_MEMORY_SIZE` to temporary files before any view code runs.
 
 ## SSRF / outbound network
 - If users influence URLs, validate scheme/host/port and apply an allowlist where possible.
@@ -135,7 +136,7 @@ non-trivial data) is the working target; nothing here claims Level 3
 | V9 Communications | HTTPS enforced in production (`SECURE_SSL_REDIRECT`, HSTS opt-in). | Met. |
 | V10 Malicious Code | No `eval`/`exec`/unsafe deserialization; dependency provenance reviewed per this doc. | Met; ongoing via `make security`. |
 | V11 Business Logic | Optimistic concurrency (aggregate version) prevents lost updates; archive/publish/restore invariants enforced in use cases, not presentation code. | Met. |
-| V12 Files and Resources | No file upload feature exists yet. | N/A currently — this file's "Files and archives" section is the checklist the moment one is added. |
+| V12 Files and Resources | Media upload (`POST /api/v1/manage/media/blobs/`, `upload_mediablobrecord` permission): type sniffed from magic bytes against an allowlist (JPEG/PNG/WebP/GIF, AVIF only if Pillow supports it; SVG and all other types rejected), Pillow restricted to the sniffed decoder; size limit (`STRATA_MEDIA_MAX_UPLOAD_BYTES`, also pre-checked on Content-Length) and header pixel limit (`STRATA_MEDIA_MAX_IMAGE_PIXELS`) enforced before decoding; full decode rejects corrupt files; EXIF/GPS/XMP/comments stripped by re-encoding (orientation applied, ICC kept); storage keys server-generated from a UUID plus the sniffed extension. `preserve_original` keeps the original bytes (including metadata) but still runs every check. | Met for uploads. Serving uploads with safe headers/separate origin and a reverse-proxy body-size limit are deployment responsibilities. |
 | V13 API | Versioned (`/api/v1/`), explicit permission classes, rate-limited, `drf-spectacular` schema generation is warning-free (`make schema-check`). | Met. |
 | V14 Configuration | `DEBUG=False`/`ALLOWED_HOSTS` enforced; secrets from environment only; pinned lockfile; container runs from the Dockerfile's pinned base. | Met. |
 

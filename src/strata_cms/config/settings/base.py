@@ -90,7 +90,14 @@ STORAGES = {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"
     },
 }
+MEDIA_URL = "media/"
+MEDIA_ROOT = env.str("DJANGO_MEDIA_ROOT", default=str(BASE_DIR / "media"))
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# Media uploads: the byte limit is enforced before any decoding; the pixel
+# limit is checked from image headers before pixel data is decoded.
+STRATA_MEDIA_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+STRATA_MEDIA_MAX_IMAGE_PIXELS = 50_000_000
 
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [

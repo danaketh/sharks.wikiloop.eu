@@ -4,6 +4,8 @@ from typing import Any
 
 from rest_framework import serializers
 
+from strata_cms.application.errors import MEDIA_REJECTION_REASONS
+
 
 class CreateContentSerializer(serializers.Serializer[Any]):
     """Validate creation of a content identity and first revision."""
@@ -49,3 +51,34 @@ class MoveRouteSerializer(serializers.Serializer[Any]):
     parent_id = serializers.UUIDField(required=False, allow_null=True, default=None)
     slug = serializers.CharField(max_length=200)
     expected_version = serializers.IntegerField(min_value=0)
+
+
+class MediaBlobUploadSerializer(serializers.Serializer[Any]):
+    """Validate a multipart media upload; the file name is never used."""
+
+    file = serializers.FileField(use_url=False)
+    preserve_original = serializers.BooleanField(default=False)
+
+
+class MediaBlobSerializer(serializers.Serializer[Any]):
+    """Describe a stored media blob (documentation of the 201 response)."""
+
+    blob_id = serializers.UUIDField()
+    content_type = serializers.CharField()
+    size_bytes = serializers.IntegerField(min_value=0)
+    width = serializers.IntegerField(min_value=1)
+    height = serializers.IntegerField(min_value=1)
+    sha256 = serializers.CharField(min_length=64, max_length=64)
+
+
+class MediaProblemSerializer(serializers.Serializer[Any]):
+    """Describe a rejected media upload (documentation of the 400 response)."""
+
+    detail = serializers.CharField()
+    code = serializers.ChoiceField(choices=sorted(MEDIA_REJECTION_REASONS))
+
+
+class ErrorDetailSerializer(serializers.Serializer[Any]):
+    """Describe a plain ``{"detail": ...}`` error response."""
+
+    detail = serializers.CharField()

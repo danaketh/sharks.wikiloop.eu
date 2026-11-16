@@ -2,6 +2,8 @@
 
 from functools import lru_cache
 
+from django.conf import settings
+
 from strata_cms.application.content.search_indexing import reindex_from_event
 from strata_cms.application.ports.authorization import ContentAuthorizationPolicy
 from strata_cms.application.ports.cache import Cache
@@ -13,6 +15,11 @@ from strata_cms.application.ports.content_uow import ContentUnitOfWork
 from strata_cms.application.ports.editors import EditorCatalog
 from strata_cms.application.ports.ids import IdGenerator
 from strata_cms.application.ports.links import LinkTargetQueries
+from strata_cms.application.ports.media import (
+    ImageProcessor,
+    MediaBlobRepository,
+    MediaFileStore,
+)
 from strata_cms.application.ports.messaging import DurableMessageQueue, MessageEnvelope
 from strata_cms.application.ports.route_uow import RouteUnitOfWork
 from strata_cms.application.ports.routing import (
@@ -26,6 +33,11 @@ from strata_cms.infrastructure.clock.system import DjangoClock
 from strata_cms.infrastructure.content_types.registry import RegistryContentTypeService
 from strata_cms.infrastructure.editors.registry import RegistryEditorCatalog
 from strata_cms.infrastructure.ids.uuid import Uuid4Generator
+from strata_cms.infrastructure.media.pillow import PillowImageProcessor
+from strata_cms.infrastructure.media.storage import DjangoMediaFileStore
+from strata_cms.infrastructure.persistence.django.media import (
+    DjangoMediaBlobRepository,
+)
 from strata_cms.infrastructure.persistence.django.outbox import DjangoOutboxQueue
 from strata_cms.infrastructure.persistence.django.projections import (
     DjangoLinkTargetQueries,
@@ -124,6 +136,26 @@ def get_route_repository() -> ContentRouteRepository:
 def get_route_path_projection() -> RoutePathProjection:
     """Return a read-only accessor over the route path projection."""
     return DjangoRoutePathProjection()
+
+
+def get_image_processor() -> ImageProcessor:
+    """Return the Pillow processor bound to the configured pixel limit."""
+    return PillowImageProcessor(max_pixels=settings.STRATA_MEDIA_MAX_IMAGE_PIXELS)
+
+
+def get_media_file_store() -> MediaFileStore:
+    """Return media byte storage over Django's ``default_storage``."""
+    return DjangoMediaFileStore()
+
+
+def get_media_blob_repository() -> MediaBlobRepository:
+    """Return the Django-backed media blob metadata repository."""
+    return DjangoMediaBlobRepository()
+
+
+def get_media_max_upload_bytes() -> int:
+    """Return the configured maximum accepted upload size in bytes."""
+    return int(settings.STRATA_MEDIA_MAX_UPLOAD_BYTES)
 
 
 def dispatch_content_event(message: MessageEnvelope) -> None:

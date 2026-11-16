@@ -16,6 +16,7 @@ _REQUIRED_PERMISSION: dict[ContentAction, str] = {
     ContentAction.PUBLISH: "strata_persistence.publish_contentrecord",
     ContentAction.ARCHIVE: "strata_persistence.delete_contentrecord",
     ContentAction.RESTORE: "strata_persistence.change_contentrecord",
+    ContentAction.UPLOAD_MEDIA: "strata_persistence.upload_mediablobrecord",
 }
 
 

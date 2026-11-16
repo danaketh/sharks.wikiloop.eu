@@ -16,6 +16,7 @@ from strata_cms.application.errors import (
     RouteHasChildrenError,
     RouteNotFoundError,
     SlugConflictError,
+    UnsupportedMediaError,
 )
 from strata_cms.domain.errors import (
     ConcurrentModificationError,
@@ -49,6 +50,7 @@ _PUBLIC_DETAILS: tuple[tuple[type[Exception], str], ...] = (
     (SlugConflictError, "Slug is already used under this parent."),
     (RouteHasChildrenError, "Content still has child routes."),
     (RouteCycleError, "Content cannot be moved under itself or a descendant."),
+    (UnsupportedMediaError, "The uploaded media was rejected."),
     (
         RevisionOwnershipError,
         "Revision does not belong to this content item.",
