@@ -166,12 +166,17 @@ class BlobReference:
 
 @dataclass(frozen=True, slots=True)
 class LinkOccurrence:
-    """One concrete link found in revision JSON."""
+    """One concrete link found in revision JSON.
+
+    ``location`` identifies blocks by UUID; ``path`` is the ``$.``-style JSON
+    path of the same value with block list indexes (``$.body[0].data.page``).
+    """
 
     kind: Literal["reference", "blob"]
     location: str
     target: UUID
     allowed_types: frozenset[ContentTypeKey] = frozenset()
+    path: str = "$"
 
 
 def join_location(trail: tuple[str, ...]) -> str:

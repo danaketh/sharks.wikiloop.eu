@@ -23,13 +23,17 @@ class ContentLink:
     """One declared link found in revision data.
 
     ``location`` is a ``/``-joined key/index trail (``~`` and ``/`` escaped as
-    ``~0``/``~1``). ``allowed_types`` is empty for blob links.
+    ``~0``/``~1``) that identifies blocks by UUID; it is the stable key stored
+    in link projections. ``path`` is the ``$.``-style JSON path of the same
+    value (block list indexes, e.g. ``$.body[0].data.page``) used for
+    validation problems. ``allowed_types`` is empty for blob links.
     """
 
     kind: Literal["reference", "blob"]
     location: str
     target: UUID
     allowed_types: frozenset[ContentTypeKey]
+    path: str
 
 
 @dataclass(frozen=True, slots=True)

@@ -363,6 +363,31 @@ def test_extract_links_from_fields_and_blocks() -> None:
     assert all(link.kind == "blob" for link in links.blobs)
 
 
+def test_extract_links_carries_json_paths_with_block_indexes() -> None:
+    service = _link_service()
+    inner = _block(3, {"image": {"$blob": _U.format(6)}})
+    data: dict[str, object] = {
+        "hero": {"$ref": _U.format(4)},
+        "cover": {"$blob": _U.format(5)},
+        "body": [
+            _block(1, {}),
+            _block(2, {"page": {"$ref": _U.format(7)}}, [inner]),
+        ],
+    }
+    prepared = _prepare(service, data)
+
+    links = service.extract_links(type_key=_PAGE, data=prepared.data)
+
+    assert [link.path for link in links.references] == [
+        "$.hero",
+        "$.body[1].data.page",
+    ]
+    assert [link.path for link in links.blobs] == [
+        "$.cover",
+        "$.body[1].slots.children[0].data.image",
+    ]
+
+
 def test_declared_block_links_accepted_including_nested_slot_child() -> None:
     service = _link_service()
     child = _block(2, {"page": {"$ref": _U.format(3)}})

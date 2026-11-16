@@ -12,6 +12,7 @@ from strata_cms.application.ports.content_types import ContentTypeService
 from strata_cms.application.ports.content_uow import ContentUnitOfWork
 from strata_cms.application.ports.editors import EditorCatalog
 from strata_cms.application.ports.ids import IdGenerator
+from strata_cms.application.ports.links import LinkTargetQueries
 from strata_cms.application.ports.messaging import DurableMessageQueue, MessageEnvelope
 from strata_cms.application.ports.route_uow import RouteUnitOfWork
 from strata_cms.application.ports.routing import (
@@ -26,6 +27,9 @@ from strata_cms.infrastructure.content_types.registry import RegistryContentType
 from strata_cms.infrastructure.editors.registry import RegistryEditorCatalog
 from strata_cms.infrastructure.ids.uuid import Uuid4Generator
 from strata_cms.infrastructure.persistence.django.outbox import DjangoOutboxQueue
+from strata_cms.infrastructure.persistence.django.projections import (
+    DjangoLinkTargetQueries,
+)
 from strata_cms.infrastructure.persistence.django.queries import (
     DjangoContentDeliveryQueries,
     DjangoContentEditorQueries,
@@ -56,7 +60,12 @@ def get_editor_catalog() -> EditorCatalog:
 
 def new_content_uow() -> ContentUnitOfWork:
     """Return a fresh transaction-scoped write Unit of Work."""
-    return DjangoContentUnitOfWork()
+    return DjangoContentUnitOfWork(clock=get_clock())
+
+
+def get_link_target_queries() -> LinkTargetQueries:
+    """Return the batched link target lookup used by content write use cases."""
+    return DjangoLinkTargetQueries()
 
 
 def get_content_queries() -> ContentEditorQueries:

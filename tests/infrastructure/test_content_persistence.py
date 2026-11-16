@@ -21,6 +21,9 @@ from strata_cms.infrastructure.persistence.django.models import (
     OutboxMessageRecord,
     RevisionRecord,
 )
+from strata_cms.infrastructure.persistence.django.projections import (
+    DjangoLinkTargetQueries,
+)
 from strata_cms.infrastructure.persistence.django.repositories import (
     DjangoContentRepository,
 )
@@ -115,6 +118,7 @@ def test_django_uow_round_trips_content_and_revision() -> None:
         clock=FrozenClock(),
         ids=SequenceIds(1, 2),
         content_types=CONTENT_TYPES,
+        link_targets=DjangoLinkTargetQueries(),
         policy=POLICY,
         actor=ACTOR_CONTEXT,
     )
@@ -146,6 +150,7 @@ def test_publish_writes_outbox_event_in_same_uow() -> None:
         clock=FrozenClock(),
         ids=SequenceIds(1, 2),
         content_types=CONTENT_TYPES,
+        link_targets=DjangoLinkTargetQueries(),
         policy=POLICY,
         actor=ACTOR_CONTEXT,
     )

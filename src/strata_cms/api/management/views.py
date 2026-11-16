@@ -65,6 +65,7 @@ from strata_cms.config.services import (
     get_content_type_service,
     get_editor_catalog,
     get_id_generator,
+    get_link_target_queries,
     get_route_repository,
     new_content_uow,
     new_route_uow,
@@ -163,6 +164,7 @@ class ContentCollectionView(ManagementAPIView):
                 clock=get_clock(),
                 ids=get_id_generator(),
                 content_types=get_content_type_service(),
+                link_targets=get_link_target_queries(),
                 policy=get_content_policy(),
                 actor=actor,
             )
@@ -346,6 +348,7 @@ class ContentRevisionCreateView(ManagementAPIView):
                 clock=get_clock(),
                 ids=get_id_generator(),
                 content_types=get_content_type_service(),
+                link_targets=get_link_target_queries(),
                 policy=get_content_policy(),
                 actor=actor,
             )

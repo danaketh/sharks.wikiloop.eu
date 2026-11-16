@@ -55,6 +55,7 @@ from strata_cms.plugin_api.links import (
     LinkOccurrence,
     ReferenceFieldDefinition,
     iter_link_values,
+    json_path_from_location,
     link_issues,
     link_publish_issues,
 )
@@ -398,6 +399,8 @@ class BlockTypeRegistry:
 
         Locations look like ``body/blocks/<block-uuid>/data/image``; nested
         blocks continue with ``slots/<name>/blocks/<block-uuid>/data/...``.
+        Each occurrence's ``path`` is the matching JSON path with block
+        indexes (``$.body[0].data.image``, ``$.body[0].slots.<name>[1]...``).
         ``data`` must already be normalized to current block schemas.
         """
         raw = data.as_dict()
@@ -409,6 +412,7 @@ class BlockTypeRegistry:
             self._collect_collection_links(
                 BlockCollection.from_json(value),
                 prefix="/".join(field.path),
+                json_prefix=_json_path(field.path),
                 found=found,
             )
         return tuple(found)
@@ -486,10 +490,13 @@ class BlockTypeRegistry:
         collection: BlockCollection,
         *,
         prefix: str,
+        json_prefix: str,
         found: list[LinkOccurrence],
     ) -> None:
-        for block in collection:
+        for index, block in enumerate(collection):
             base = f"{prefix}/blocks/{block.id}"
+            json_base = f"{json_prefix}[{index}]"
+            data_path = f"{json_base}.data"
             definition = self.require(block.type_key).definition
             block_data = block.data.as_dict()
             for reference in definition.reference_fields:
@@ -502,6 +509,7 @@ class BlockTypeRegistry:
                             f"{base}/data/{location}",
                             ContentReference.from_json(raw).target,
                             reference.allowed_types,
+                            json_path_from_location(location, prefix=data_path),
                         )
                     )
             for blob in definition.blob_fields:
@@ -513,12 +521,14 @@ class BlockTypeRegistry:
                             "blob",
                             f"{base}/data/{location}",
                             BlobReference.from_json(raw).blob_id,
+                            path=json_path_from_location(location, prefix=data_path),
                         )
                     )
             for name, children in block.slots:
                 self._collect_collection_links(
                     children,
                     prefix=f"{base}/slots/{name}",
+                    json_prefix=f"{json_base}.slots.{name}",
                     found=found,
                 )
 

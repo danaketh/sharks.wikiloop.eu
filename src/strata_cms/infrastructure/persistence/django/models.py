@@ -248,3 +248,104 @@ class RoutePathRecord(models.Model):
     def __str__(self) -> str:
         """Return a concise persistence-record identity."""
         return f"path:{self.path}"
+
+
+class ContentTitleRecord(models.Model):
+    """Rebuildable latest-draft title projection backing reference pickers."""
+
+    content_id = models.UUIDField(primary_key=True, editable=False)
+    type_key = models.CharField(max_length=200)
+    title = models.TextField(null=True, blank=True)
+    archived = models.BooleanField(default=False)
+    updated_at = models.DateTimeField()
+
+    class Meta:
+        """Support per-type title search/ordering."""
+
+        db_table = "strata_content_title"
+        indexes = [
+            models.Index(fields=["type_key", "title"], name="strata_title_type_title"),
+        ]
+
+    def __str__(self) -> str:
+        """Return a concise persistence-record identity."""
+        return f"title:{self.content_id}"
+
+
+class ContentReferenceRecord(models.Model):
+    """Rebuildable reference index row in the draft or published scope."""
+
+    class Scope(models.TextChoices):
+        """Which revision of the source content the row was derived from."""
+
+        DRAFT = "draft", "Draft"
+        PUBLISHED = "published", "Published"
+
+    scope = models.CharField(max_length=16, choices=Scope.choices)
+    source_id = models.UUIDField()
+    source_revision_id = models.UUIDField()
+    location = models.CharField(max_length=2000)
+    target_id = models.UUIDField()
+    target_type = models.CharField(max_length=200)
+
+    class Meta:
+        """Support "used by" (target) and per-source replacement lookups."""
+
+        db_table = "strata_content_reference"
+        indexes = [
+            models.Index(fields=["scope", "target_id"], name="strata_ref_scope_target"),
+            models.Index(fields=["scope", "source_id"], name="strata_ref_scope_source"),
+        ]
+
+    def __str__(self) -> str:
+        """Return a concise persistence-record identity."""
+        return f"ref:{self.scope}:{self.source_id}->{self.target_id}"
+
+
+class MediaBlobRecord(models.Model):
+    """Immutable stored binary referenced from revisions via ``$blob`` links."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    storage_key = models.CharField(max_length=500, unique=True)
+    sha256 = models.CharField(max_length=64)
+    content_type = models.CharField(max_length=200)
+    size_bytes = models.PositiveBigIntegerField()
+    width = models.PositiveIntegerField(null=True, blank=True)
+    height = models.PositiveIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField()
+    created_by = models.CharField(max_length=255)
+
+    class Meta:
+        """Persistence table naming and the upload permission."""
+
+        db_table = "strata_media_blob"
+        permissions = [
+            ("upload_mediablobrecord", "Can upload media blobs"),
+        ]
+
+    def __str__(self) -> str:
+        """Return a concise persistence-record identity."""
+        return f"blob:{self.pk}"
+
+
+class MediaBlobUsageRecord(models.Model):
+    """Rebuildable blob usage projection: one row per blob per revision."""
+
+    blob_id = models.UUIDField()
+    content_id = models.UUIDField()
+    revision_id = models.UUIDField()
+
+    class Meta:
+        """A revision uses each blob at most once."""
+
+        db_table = "strata_media_blob_usage"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["blob_id", "revision_id"],
+                name="strata_blob_usage_blob_revision_uniq",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        """Return a concise persistence-record identity."""
+        return f"blob-usage:{self.blob_id}@{self.revision_id}"

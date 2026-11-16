@@ -5,8 +5,13 @@ from typing import Protocol
 
 from django.db import transaction
 
+from strata_cms.application.ports.clock import Clock
+from strata_cms.infrastructure.clock.system import DjangoClock
 from strata_cms.infrastructure.persistence.django.outbox import (
     DjangoOutboxEventPublisher,
+)
+from strata_cms.infrastructure.persistence.django.projections import (
+    DjangoContentProjectionWriter,
 )
 from strata_cms.infrastructure.persistence.django.repositories import (
     DjangoContentRepository,
@@ -30,12 +35,16 @@ class _AtomicContext(Protocol):
 class DjangoContentUnitOfWork:
     """Keep content state, revisions, and outbox writes in one transaction."""
 
-    def __init__(self, *, using: str = "default") -> None:
-        """Wire repository/event adapters bound to one database alias."""
+    def __init__(self, *, clock: Clock | None = None, using: str = "default") -> None:
+        """Wire repository/event/projection adapters bound to one database alias."""
         self._using = using
         self.contents = DjangoContentRepository(using=using, lock_reads=True)
         self.revisions = DjangoRevisionRepository(using=using)
         self.events = DjangoOutboxEventPublisher(using=using)
+        self.projections = DjangoContentProjectionWriter(
+            clock=clock if clock is not None else DjangoClock(),
+            using=using,
+        )
         self._atomic: _AtomicContext | None = None
         self._committed = False
 

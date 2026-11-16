@@ -28,6 +28,7 @@ from strata_cms.plugin_api.links import (
     BlobReference,
     ContentReference,
     iter_link_values,
+    json_path_from_location,
     link_issues,
     link_publish_issues,
 )
@@ -216,6 +217,7 @@ class RegistryContentTypeService(ContentTypeService):
                         location,
                         ContentReference.from_json(raw).target,
                         reference.allowed_types,
+                        json_path_from_location(location),
                     )
                 )
         for blob in definition.blob_fields:
@@ -228,6 +230,7 @@ class RegistryContentTypeService(ContentTypeService):
                         location,
                         BlobReference.from_json(raw).blob_id,
                         frozenset(),
+                        json_path_from_location(location),
                     )
                 )
         for occurrence in self._registry.blocks.collect_links(
@@ -238,6 +241,7 @@ class RegistryContentTypeService(ContentTypeService):
                 occurrence.location,
                 occurrence.target,
                 occurrence.allowed_types,
+                occurrence.path,
             )
             (references if occurrence.kind == "reference" else blobs).append(link)
         return ContentLinks(references=tuple(references), blobs=tuple(blobs))
