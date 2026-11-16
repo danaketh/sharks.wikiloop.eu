@@ -493,3 +493,66 @@ def test_rebuild_reports_revisions_of_uninstalled_types(
     }
     assert report.draft_revisions == 1
     assert report.published_revisions == 1
+
+
+def test_published_index_remove_keeps_rows_of_currently_published_source(
+    content_types: RegistryContentTypeService,
+) -> None:
+    """Interleaving: a stale "not published" read must not drop current rows."""
+    target = _create(content_types, SPECIES, {"title": "Nurse"})
+    _publish(content_types, target)
+    source = _create(
+        content_types, PROFILE, {"name": "Src", "related": _ref(target.content_id)}
+    )
+    version = _publish(content_types, source)
+    index = DjangoPublishedReferenceIndex()
+    links = content_types.revision_links(
+        revision_from_record(RevisionRecord.objects.get(pk=source.revision_id))
+    )
+    index.replace(source.content_id, source.revision_id, links.references)
+
+    # Worker A read "not published" earlier; B already re-indexed the source.
+    index.remove(source.content_id)
+
+    published_rows = ContentReferenceRecord.objects.filter(
+        scope="published", source_id=source.content_id
+    )
+    assert published_rows.count() == 1
+
+    _archive(source.content_id, version)
+    index.remove(source.content_id)
+
+    assert not published_rows.exists()
+
+
+def test_published_index_remove_drops_rows_of_unpublished_source(
+    content_types: RegistryContentTypeService,
+) -> None:
+    target = _create(content_types, SPECIES, {"title": "Basking"})
+    _publish(content_types, target)
+    draft_only = _create(
+        content_types, PROFILE, {"name": "Draft", "related": _ref(target.content_id)}
+    )
+    ContentReferenceRecord.objects.create(
+        scope="published",
+        source_id=draft_only.content_id,
+        source_revision_id=draft_only.revision_id,
+        location="related",
+        target_id=target.content_id,
+        target_type=str(SPECIES),
+    )
+    missing = ContentId(uuid4())
+    ContentReferenceRecord.objects.create(
+        scope="published",
+        source_id=missing,
+        source_revision_id=uuid4(),
+        location="related",
+        target_id=target.content_id,
+        target_type=str(SPECIES),
+    )
+
+    index = DjangoPublishedReferenceIndex()
+    index.remove(draft_only.content_id)
+    index.remove(missing)
+
+    assert not ContentReferenceRecord.objects.filter(scope="published").exists()

@@ -90,7 +90,12 @@ class PublishedReferenceIndex(Protocol):
         ...  # pragma: no cover - protocol declaration
 
     def remove(self, source_id: ContentId) -> None:
-        """Delete every published row of ``source_id`` (no-op when absent)."""
+        """Delete every published row of ``source_id`` (no-op when absent).
+
+        A no-op while the source is currently published and not archived, so a
+        handler acting on a stale "not published" read cannot drop rows that a
+        concurrent republish just wrote.
+        """
         ...  # pragma: no cover - protocol declaration
 
     def referencing(

@@ -1,5 +1,8 @@
 """Django adapter for the published-scope reverse reference index."""
 
+from datetime import datetime
+from uuid import UUID
+
 from django.db import transaction
 
 from strata_cms.application.ports.content_types import ContentLink
@@ -15,9 +18,10 @@ _PUBLISHED = ContentReferenceRecord.Scope.PUBLISHED
 class DjangoPublishedReferenceIndex:
     """Published reference rows in ``strata_content_reference``.
 
-    ``replace`` runs atomically (a savepoint inside an outer transaction) and
-    locks the source content row so concurrent workers handling events for
-    the same source serialize instead of interleaving delete/insert.
+    ``replace`` and ``remove`` run atomically (a savepoint inside an outer
+    transaction) and lock the source content row, so concurrent workers
+    handling events for the same source serialize, and each re-checks the
+    source's published state under that lock before writing.
     """
 
     def __init__(self, *, using: str = "default") -> None:
@@ -37,13 +41,7 @@ class DjangoPublishedReferenceIndex:
         state reconciles the rows, so a slow, stale handler cannot win.
         """
         with transaction.atomic(using=self._using):
-            current = (
-                ContentRecord.objects.using(self._using)
-                .select_for_update()
-                .filter(pk=source_id)
-                .values_list("published_revision_id", "archived_at")
-                .first()
-            )
+            current = self._lock_published_state(source_id)
             if current is None or current != (revision_id, None):
                 return
             rows = ContentReferenceRecord.objects.using(self._using)
@@ -72,10 +70,33 @@ class DjangoPublishedReferenceIndex:
             )
 
     def remove(self, source_id: ContentId) -> None:
-        """Delete every published row of ``source_id``."""
-        ContentReferenceRecord.objects.using(self._using).filter(
-            scope=_PUBLISHED, source_id=source_id
-        ).delete()
+        """Delete the source's published rows unless it is currently published.
+
+        A no-op while the source is published and not archived: the caller's
+        "not published" read is then stale (a concurrent republish's
+        ``replace`` owns the rows).
+        """
+        with transaction.atomic(using=self._using):
+            current = self._lock_published_state(source_id)
+            if current is not None:
+                published_revision_id, archived_at = current
+                if published_revision_id is not None and archived_at is None:
+                    return
+            ContentReferenceRecord.objects.using(self._using).filter(
+                scope=_PUBLISHED, source_id=source_id
+            ).delete()
+
+    def _lock_published_state(
+        self, source_id: ContentId
+    ) -> tuple[UUID | None, datetime | None] | None:
+        """Lock the source row; return its published revision and archive time."""
+        return (
+            ContentRecord.objects.using(self._using)
+            .select_for_update()
+            .filter(pk=source_id)
+            .values_list("published_revision_id", "archived_at")
+            .first()
+        )
 
     def referencing(
         self,
