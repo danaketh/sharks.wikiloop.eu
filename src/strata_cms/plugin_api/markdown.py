@@ -8,6 +8,7 @@ sanitized silently; disallowed constructs are rejected so editors can fix them.
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cache
 from urllib.parse import unquote
 
 from markdown_it import MarkdownIt
@@ -32,6 +33,7 @@ class MarkdownProfile:
     allow_relative_links: bool
     allow_tables: bool
     max_length: int
+    max_nesting_depth: int = 8
 
 
 DEFAULT_MARKDOWN_PROFILE = MarkdownProfile(
@@ -40,6 +42,7 @@ DEFAULT_MARKDOWN_PROFILE = MarkdownProfile(
     allow_relative_links=True,
     allow_tables=True,
     max_length=200_000,
+    max_nesting_depth=8,
 )
 
 _BASE_TOKEN_TYPES = frozenset(
@@ -88,15 +91,24 @@ _TABLE_TOKEN_TYPES = frozenset(
         "td_close",
     }
 )
+_CONTAINER_OPEN = frozenset(
+    {"blockquote_open", "bullet_list_open", "ordered_list_open"}
+)
+_CONTAINER_CLOSE = frozenset(
+    {"blockquote_close", "bullet_list_close", "ordered_list_close"}
+)
 _SCHEME = re.compile(r"^([^/?#]*?):")
 _VALID_SCHEME_NAME = re.compile(r"^[a-z][a-z0-9+.-]*$")
 _CONTROL_AND_SPACE = re.compile(r"[\x00-\x20\x7f-\x9f\u2028\u2029]")
 
 
 def normalize_markdown(source: str) -> str:
-    """Canonicalize line endings and trailing whitespace without reflowing text."""
-    lines = source.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    text = "\n".join(line.rstrip() for line in lines).rstrip("\n")
+    """Canonicalize line endings and document-end whitespace.
+
+    Normalization never changes rendering: hard line breaks and spaces inside
+    code blocks are preserved; only the end of the whole document is trimmed.
+    """
+    text = source.replace("\r\n", "\n").replace("\r", "\n").rstrip()
     return f"{text}\n" if text else ""
 
 
@@ -125,32 +137,71 @@ def validate_markdown(
     allowed_types = _BASE_TOKEN_TYPES | (
         _TABLE_TOKEN_TYPES if profile.allow_tables else frozenset()
     )
-    for token in _walk(_validation_parser().parse(source)):
+    parser = _validation_parser(profile.max_nesting_depth)
+    tokens = parser.parse(source)
+    if _too_deep(source, tokens, profile.max_nesting_depth):
+        report(
+            "markdown_nesting_too_deep",
+            f"Nesting deeper than {profile.max_nesting_depth} levels is not allowed.",
+        )
+    for token in _walk(tokens):
         _check_token(token, profile, allowed_types, report)
     return tuple(issues.values())
 
 
 def render_markdown_preview(source: str) -> str:
     """Render HTML for admin preview only; raw HTML in the source is escaped."""
-    html: str = _preview_parser().render(source)
+    html: str = _PREVIEW_PARSER.render(source)
     return html
 
 
-def _validation_parser() -> MarkdownIt:
-    parser = MarkdownIt("commonmark", {"html": True}).enable("table")
-    # Keep unsafe links as link tokens so their destinations can be reported
-    # instead of being silently downgraded to text by the library.
-    parser.validateLink = _accept_any_link  # type: ignore[method-assign]
-    return parser
+class _ValidationParser(MarkdownIt):
+    """Parser that keeps unsafe links as tokens so they can be reported."""
+
+    def validateLink(self, url: str) -> bool:  # noqa: N802 - library hook name
+        """Accept every destination; the profile check judges it afterwards."""
+        del url
+        return True
 
 
-def _accept_any_link(url: str) -> bool:
-    del url
-    return True
+@cache
+def _validation_parser(max_nesting_depth: int) -> MarkdownIt:
+    # markdown-it silently drops everything past ``maxNesting``. The limit sits
+    # far above what the depth check allows (a container costs at most two
+    # levels), so any source deep enough to be truncated has already tripped
+    # the nesting check and cannot hide content from validation.
+    limit = 4 * max_nesting_depth + 16
+    return _ValidationParser("commonmark", {"html": True, "maxNesting": limit}).enable(
+        "table"
+    )
 
 
-def _preview_parser() -> MarkdownIt:
-    return MarkdownIt("commonmark", {"html": False}).enable("table")
+_PREVIEW_PARSER = MarkdownIt("commonmark", {"html": False}).enable("table")
+
+
+def _too_deep(source: str, tokens: list[Token], max_depth: int) -> bool:
+    """Detect container or link-label nesting beyond the profile cap."""
+    containers = 0
+    for token in tokens:
+        if token.type in _CONTAINER_OPEN:
+            containers += 1
+        elif token.type in _CONTAINER_CLOSE:
+            containers -= 1
+        if containers > max_depth:
+            return True
+    return _bracket_depth(source) > max_depth
+
+
+def _bracket_depth(source: str) -> int:
+    """Return the deepest ``[`` nesting; conservative guard for inline links."""
+    depth = deepest = 0
+    for char in source:
+        if char == "[":
+            depth += 1
+            deepest = max(deepest, depth)
+        elif char == "]" and depth:
+            depth -= 1
+    return deepest
 
 
 def _walk(tokens: list[Token]) -> list[Token]:

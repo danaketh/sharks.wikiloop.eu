@@ -139,3 +139,47 @@ def test_relative_links_rejected_when_profile_disallows_them() -> None:
     issues = validate_markdown("[x](/a)\n", profile=profile)
 
     assert "markdown_link_scheme_not_allowed" in {i.code for i in issues}
+
+
+@pytest.mark.parametrize("depth", [9, 15, 19, 20, 25, 100])
+@pytest.mark.parametrize(
+    "payload",
+    ["<b>x</b>", "<script>alert(1)</script>", "[x](javascript:alert(1))"],
+)
+def test_deeply_nested_blockquotes_are_never_unvalidated(
+    depth: int, payload: str
+) -> None:
+    codes = {i.code for i in validate_markdown("> " * depth + payload + "\n")}
+
+    assert "markdown_nesting_too_deep" in codes
+
+
+@pytest.mark.parametrize("depth", [9, 10, 25, 100])
+def test_deeply_nested_lists_are_never_unvalidated(depth: int) -> None:
+    lines = [f"{'  ' * i}- item" for i in range(depth)]
+    src = "\n".join([*lines, f"{'  ' * depth}- [x](javascript:alert(1))"]) + "\n"
+
+    assert "markdown_nesting_too_deep" in {i.code for i in validate_markdown(src)}
+
+
+def test_deep_link_label_nesting_is_reported() -> None:
+    src = "[" * 60 + "[x](javascript:alert(1))" + "]" * 60 + "\n"
+
+    assert "markdown_nesting_too_deep" in {i.code for i in validate_markdown(src)}
+
+
+def test_reasonable_nesting_is_allowed() -> None:
+    lines = [f"{'  ' * i}- item {i}" for i in range(4)]
+    src = "\n".join("> " + line for line in lines) + "\n\n> *a **b *c* d** e*\n"
+
+    assert validate_markdown(src) == ()
+
+
+def test_normalize_preserves_hard_line_breaks() -> None:
+    assert normalize_markdown("a  \nb\n") == "a  \nb\n"
+
+
+def test_normalize_preserves_trailing_spaces_in_code_fences() -> None:
+    src = "```\nx  \ny\n```\n"
+
+    assert normalize_markdown(src) == src

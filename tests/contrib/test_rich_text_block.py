@@ -10,13 +10,14 @@ from strata_cms.plugin_api import (
     BlockCollection,
     BlockValidationError,
     EditorInputKind,
+    StrataRegistry,
     StrataRegistryBuilder,
 )
 
 _ID = "00000000-0000-0000-0000-000000000301"
 
 
-def _registry():  # type: ignore[no-untyped-def]
+def _registry() -> StrataRegistry:
     builder = StrataRegistryBuilder()
     builder.register_plugin(RICH_TEXT_PLUGIN)
     registrar = builder.registrar_for(RICH_TEXT_PLUGIN.key)
@@ -71,4 +72,6 @@ def test_rich_text_block_registered_with_markdown_editor() -> None:
 def test_rich_text_delivery_exposes_markdown_source() -> None:
     rendered = _registry().blocks.delivery_collection(_collection("## Hi\n"))
 
-    assert rendered[0]["data"] == {"text": "## Hi\n"}
+    first = rendered[0]
+    assert isinstance(first, dict)
+    assert first["data"] == {"text": "## Hi\n"}
