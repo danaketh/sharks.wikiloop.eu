@@ -11,7 +11,11 @@ from strata_cms.application.content.results import (
     ContentLifecycleResult,
     ContentWriteResult,
 )
-from strata_cms.application.errors import ContentNotFoundError, RevisionNotFoundError
+from strata_cms.application.errors import (
+    ContentNotFoundError,
+    ContentNotReadyError,
+    RevisionNotFoundError,
+)
 from strata_cms.application.ports.authorization import (
     ContentAction,
     ContentActor,
@@ -137,6 +141,12 @@ def publish_content(
 
         content.require_version(command.expected_version)
         content_types.validate_revision(revision)
+        problems = content_types.publish_issues(revision)
+        if problems:
+            raise ContentNotReadyError(
+                type_key=revision.content_type,
+                problems=problems,
+            )
         now = clock.now()
         content, changed = content.publish(
             revision,

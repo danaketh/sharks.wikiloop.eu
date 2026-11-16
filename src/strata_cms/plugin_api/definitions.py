@@ -21,7 +21,12 @@ from strata_cms.plugin_api.errors import (
 )
 from strata_cms.plugin_api.keys import PluginKey
 from strata_cms.plugin_api.migrations import SchemaMigrationSet
-from strata_cms.plugin_api.schema import ContentDeliverySerializer, ContentSchema
+from strata_cms.plugin_api.schema import (
+    ContentDeliverySerializer,
+    ContentSchema,
+    PublishReadiness,
+    ValidationIssue,
+)
 
 
 class ContentCapability(StrEnum):
@@ -100,6 +105,7 @@ class ContentTypeDefinition[T]:
     capabilities: frozenset[ContentCapability] = field(default_factory=frozenset)
     block_fields: tuple[BlockFieldDefinition, ...] = ()
     editor: ContentEditorDefinition | None = None
+    readiness: PublishReadiness[T] | None = None
 
     def __post_init__(self) -> None:
         """Validate schema history and declared structured-block fields."""
@@ -200,6 +206,17 @@ class ContentTypeDefinition[T]:
         if self.delivery is None:
             return self.schema.serialize(value).as_dict()
         return RevisionData.from_mapping(self.delivery.serialize(value)).as_dict()
+
+    def publish_issues_untyped(self, value: object) -> tuple[ValidationIssue, ...]:
+        """Return publish-only issues for a decoded runtime value."""
+        if self.readiness is None:
+            return ()
+        if not isinstance(value, self.schema.value_type):
+            raise SchemaDecodeError(
+                f"Content type '{self.key}' expects "
+                f"{self.schema.value_type.__name__}, got {type(value).__name__}."
+            )
+        return self.readiness.publish_issues(value)
 
     def _require_valid(self, value: T) -> None:
         issues = self.schema.validate(value)

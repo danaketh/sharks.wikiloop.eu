@@ -6,6 +6,7 @@ import pytest
 
 from strata_cms.application.content.commands import CreateContent, PublishContent
 from strata_cms.application.content.use_cases import create_content, publish_content
+from strata_cms.application.errors import ContentDataProblem
 from strata_cms.application.ports.authorization import ContentAction, ContentActor
 from strata_cms.application.ports.content_types import PreparedContentData
 from strata_cms.domain.content import Content
@@ -57,6 +58,10 @@ class FakeContentTypes:
 
     def validate_revision(self, revision: Revision) -> None:
         del revision
+
+    def publish_issues(self, revision: Revision) -> tuple[ContentDataProblem, ...]:
+        del revision
+        return ()
 
     def delivery_data(self, revision: Revision) -> dict[str, object]:
         return revision.data.as_dict()

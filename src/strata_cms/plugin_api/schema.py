@@ -34,6 +34,14 @@ class ContentSchema[T](Protocol):
         ...  # pragma: no cover - protocol declaration
 
 
+class PublishReadiness[T](Protocol):
+    """Report problems that block publishing but not saving a draft."""
+
+    def publish_issues(self, value: T) -> tuple[ValidationIssue, ...]:
+        """Return publish-only problems for a decoded current-schema value."""
+        ...  # pragma: no cover - protocol declaration
+
+
 class ContentDeliverySerializer[T](Protocol):
     """Serialize typed content into its default Delivery API representation."""
 

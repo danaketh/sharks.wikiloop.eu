@@ -25,6 +25,8 @@ class EditableContent:
     data: RevisionData
     published_revision_id: RevisionId | None
     is_archived: bool
+    created_at: datetime
+    created_by: ActorId
 
 
 @dataclass(frozen=True, slots=True)

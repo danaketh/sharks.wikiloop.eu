@@ -50,6 +50,8 @@ class DjangoContentEditorQueries:
                 else None
             ),
             is_archived=record.archived_at is not None,
+            created_at=revision.created_at,
+            created_by=ActorId(revision.created_by),
         )
 
     def list_revisions(self, content_id: ContentId) -> tuple[RevisionSummary, ...]:
@@ -110,6 +112,8 @@ class DjangoContentEditorQueries:
                 else None
             ),
             is_archived=content.archived_at is not None,
+            created_at=revision.created_at,
+            created_by=ActorId(revision.created_by),
         )
 
 

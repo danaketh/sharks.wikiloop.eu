@@ -15,7 +15,7 @@ from strata_cms.plugin_api.errors import (
     SchemaDecodeError,
 )
 from strata_cms.plugin_api.migrations import SchemaMigrationSet
-from strata_cms.plugin_api.schema import ValidationIssue
+from strata_cms.plugin_api.schema import PublishReadiness, ValidationIssue
 
 _BLOCK_KEY = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 _SLOT_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -171,6 +171,7 @@ class BlockDefinition[T]:
     slots: tuple[BlockSlotDefinition, ...] = ()
     delivery: BlockDeliverySerializer[T] | None = None
     editor: BlockEditorDefinition | None = None
+    readiness: PublishReadiness[T] | None = None
 
     def __post_init__(self) -> None:
         """Validate migration history and unique slot names at registration."""
@@ -240,6 +241,17 @@ class BlockDefinition[T]:
         if self.delivery is None:
             return self.schema.serialize(value).as_dict()
         return RevisionData.from_mapping(self.delivery.serialize(value)).as_dict()
+
+    def publish_issues_untyped(self, value: object) -> tuple[ValidationIssue, ...]:
+        """Return publish-only issues for a decoded runtime block value."""
+        if self.readiness is None:
+            return ()
+        if not isinstance(value, self.schema.value_type):
+            raise SchemaDecodeError(
+                f"Block type '{self.key}' expects "
+                f"{self.schema.value_type.__name__}, got {type(value).__name__}."
+            )
+        return self.readiness.publish_issues(value)
 
     def _require_valid(self, value: T) -> None:
         issues = self.schema.validate(value)

@@ -106,6 +106,10 @@ class RegisteredContentType(Protocol):
         """Return current public delivery JSON."""
         ...  # pragma: no cover - protocol declaration
 
+    def publish_issues_untyped(self, value: object) -> tuple[ValidationIssue, ...]:
+        """Return publish-only issues for one decoded current value."""
+        ...  # pragma: no cover - protocol declaration
+
 
 class RegisteredBlockType(Protocol):
     """Type-erased runtime view of heterogeneous block definitions."""
@@ -145,6 +149,10 @@ class RegisteredBlockType(Protocol):
         data: RevisionData,
     ) -> dict[str, object]:
         """Return public data for one historical block payload."""
+        ...  # pragma: no cover - protocol declaration
+
+    def publish_issues_untyped(self, value: object) -> tuple[ValidationIssue, ...]:
+        """Return publish-only issues for one decoded current block value."""
         ...  # pragma: no cover - protocol declaration
 
 
@@ -311,6 +319,56 @@ class BlockTypeRegistry:
             )
             _write_path(raw, field.path, normalized.as_json(), create=False)
         return RevisionData.from_mapping(raw)
+
+    def publish_issues(
+        self,
+        data: RevisionData,
+        fields: tuple[BlockFieldDefinition, ...],
+    ) -> tuple[ValidationIssue, ...]:
+        """Collect publish-readiness issues from every declared block, recursively.
+
+        ``data`` must already be normalized to current block schemas.
+        """
+        raw = data.as_dict()
+        issues: list[ValidationIssue] = []
+        for field in fields:
+            value = _read_path(raw, field.path)
+            if value is _MISSING:
+                continue
+            issues.extend(
+                self._collection_publish_issues(
+                    BlockCollection.from_json(value),
+                    path=_json_path(field.path),
+                )
+            )
+        return tuple(issues)
+
+    def _collection_publish_issues(
+        self,
+        collection: BlockCollection,
+        *,
+        path: str,
+    ) -> list[ValidationIssue]:
+        issues: list[ValidationIssue] = []
+        for index, block in enumerate(collection):
+            block_path = f"{path}[{index}]"
+            entry = self.require(block.type_key)
+            value = entry.definition.decode_untyped(
+                schema_version=block.schema_version,
+                data=block.data,
+            )
+            issues.extend(
+                _prefix_issue(issue, f"{block_path}.data")
+                for issue in entry.definition.publish_issues_untyped(value)
+            )
+            for name, children in block.slots:
+                issues.extend(
+                    self._collection_publish_issues(
+                        children,
+                        path=f"{block_path}.slots.{name}",
+                    )
+                )
+        return issues
 
     def apply_delivery_fields(
         self,

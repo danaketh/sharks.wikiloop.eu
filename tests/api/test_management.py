@@ -1,9 +1,20 @@
+from collections.abc import Mapping
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.urls import reverse
 from rest_framework.test import APIClient
 
+from strata_cms.api.management import views
+from strata_cms.application.errors import ContentDataProblem
+from strata_cms.application.ports.content_types import (
+    ContentTypeService,
+    PreparedContentData,
+)
+from strata_cms.config.services import get_content_type_service
+from strata_cms.domain.revision import Revision
+from strata_cms.domain.value_objects import ContentTypeKey
 from strata_cms.examples.simple_article import EXAMPLE_CONTENT_TYPE
 from strata_cms.infrastructure.persistence.django.models import ContentRecord
 
@@ -344,3 +355,99 @@ def test_management_api_respects_django_permissions_for_staff() -> None:
     response = client.get(reverse("api:management:content-types"))
 
     assert response.status_code == 403
+
+
+class _NotReadyContentTypes:
+    """Real content-type service plus a fixed publish-readiness problem."""
+
+    def __init__(self, inner: ContentTypeService) -> None:
+        self._inner = inner
+
+    def prepare_for_write(
+        self,
+        *,
+        type_key: ContentTypeKey,
+        schema_version: int,
+        data: Mapping[str, object],
+    ) -> PreparedContentData:
+        return self._inner.prepare_for_write(
+            type_key=type_key, schema_version=schema_version, data=data
+        )
+
+    def validate_revision(self, revision: Revision) -> None:
+        self._inner.validate_revision(revision)
+
+    def publish_issues(self, revision: Revision) -> tuple[ContentDataProblem, ...]:
+        del revision
+        return (
+            ContentDataProblem(
+                code="fake_not_ready",
+                message="Not ready.",
+                path="$.body",
+            ),
+        )
+
+    def delivery_data(self, revision: Revision) -> dict[str, object]:
+        return self._inner.delivery_data(revision)
+
+
+def _create_article(client: APIClient) -> dict[str, object]:
+    create = client.post(
+        reverse("api:management:content-create"),
+        {
+            "type": str(EXAMPLE_CONTENT_TYPE),
+            "schema_version": 2,
+            "data": {"title": "First", "body": "Body"},
+        },
+        format="json",
+    )
+    assert create.status_code == 201
+    created: dict[str, object] = create.json()
+    return created
+
+
+def test_publish_not_ready_returns_422_with_problems(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _staff_client()
+    created = _create_article(client)
+    inner = get_content_type_service()
+    monkeypatch.setattr(
+        views, "get_content_type_service", lambda: _NotReadyContentTypes(inner)
+    )
+
+    response = client.post(
+        reverse("api:management:content-publish", args=[created["content_id"]]),
+        {"expected_version": 1, "revision_id": created["revision_id"]},
+        format="json",
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["problems"] == [
+        {"code": "fake_not_ready", "message": "Not ready.", "path": "$.body"}
+    ]
+    assert (
+        ContentRecord.objects.get(pk=str(created["content_id"])).published_revision_id
+        is None
+    )
+
+
+def test_document_includes_publish_readiness_for_latest_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _staff_client()
+    created = _create_article(client)
+    url = reverse("api:management:content-detail", args=[created["content_id"]])
+
+    ready = client.get(url).json()
+    assert ready["publish_readiness"] == {"ready": True, "problems": []}
+
+    inner = get_content_type_service()
+    monkeypatch.setattr(
+        views, "get_content_type_service", lambda: _NotReadyContentTypes(inner)
+    )
+    not_ready = client.get(url).json()
+
+    assert not_ready["publish_readiness"]["ready"] is False
+    assert not_ready["publish_readiness"]["problems"][0]["code"] == "fake_not_ready"

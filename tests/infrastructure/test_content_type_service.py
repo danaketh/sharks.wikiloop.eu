@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -15,12 +16,15 @@ from strata_cms.domain.value_objects import (
     RevisionId,
 )
 from strata_cms.examples.simple_article import (
+    EXAMPLE_ARTICLE,
     EXAMPLE_CONTENT_TYPE,
+    EXAMPLE_PLUGIN,
+    ArticleData,
     register_example,
 )
 from strata_cms.examples.structured_page import LANDING_PAGE_TYPE
 from strata_cms.infrastructure.content_types import RegistryContentTypeService
-from strata_cms.plugin_api import StrataRegistryBuilder
+from strata_cms.plugin_api import StrataRegistryBuilder, ValidationIssue
 
 
 def _service() -> RegistryContentTypeService:
@@ -147,3 +151,56 @@ def test_structured_content_delivery_uses_block_delivery_serializers() -> None:
             }
         ],
     }
+
+
+class _NonBlankBody:
+    def publish_issues(self, value: ArticleData) -> tuple[ValidationIssue, ...]:
+        if value.body.strip():
+            return ()
+        return (
+            ValidationIssue(
+                code="body_required_to_publish",
+                message="Body is required to publish.",
+                path="$.body",
+            ),
+        )
+
+
+def test_publish_issues_evaluated_after_historical_migration() -> None:
+    builder = StrataRegistryBuilder()
+    builder.register_plugin(EXAMPLE_PLUGIN)
+    registrar = builder.registrar_for(EXAMPLE_PLUGIN.key)
+    registrar.register_content_type(replace(EXAMPLE_ARTICLE, readiness=_NonBlankBody()))
+    service = RegistryContentTypeService(builder.build(strata_version="0.1.0"))
+    revision = Revision(
+        id=RevisionId(UUID(int=2)),
+        content_id=ContentId(UUID(int=1)),
+        number=1,
+        content_type=EXAMPLE_CONTENT_TYPE,
+        schema_version=1,
+        data=RevisionData.from_mapping({"heading": "Old title", "body": ""}),
+        created_at=datetime(2026, 9, 12, tzinfo=UTC),
+        created_by=ActorId("user:1"),
+    )
+
+    problems = service.publish_issues(revision)
+
+    assert [(p.code, p.path) for p in problems] == [
+        ("body_required_to_publish", "$.body")
+    ]
+    service.validate_revision(revision)
+
+
+def test_publish_issues_empty_without_readiness() -> None:
+    revision = Revision(
+        id=RevisionId(UUID(int=2)),
+        content_id=ContentId(UUID(int=1)),
+        number=1,
+        content_type=EXAMPLE_CONTENT_TYPE,
+        schema_version=2,
+        data=RevisionData.from_mapping({"title": "T", "body": ""}),
+        created_at=datetime(2026, 9, 12, tzinfo=UTC),
+        created_by=ActorId("user:1"),
+    )
+
+    assert _service().publish_issues(revision) == ()

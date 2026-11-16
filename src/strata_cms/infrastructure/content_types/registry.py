@@ -70,6 +70,27 @@ class RegistryContentTypeService(ContentTypeService):
         except (InvalidRevisionDataError, SchemaError) as exc:
             raise self._invalid_data(revision.content_type, exc) from exc
 
+    def publish_issues(self, revision: Revision) -> tuple[ContentDataProblem, ...]:
+        """Evaluate publish readiness on the migrated, normalized current value."""
+        entry = self._require(revision.content_type)
+        try:
+            normalized, value = self._normalize_and_decode(
+                entry,
+                schema_version=revision.schema_version,
+                data=revision.data,
+            )
+            issues = entry.definition.publish_issues_untyped(value)
+            issues += self._registry.blocks.publish_issues(
+                normalized,
+                entry.definition.block_fields,
+            )
+        except (InvalidRevisionDataError, SchemaError) as exc:
+            raise self._invalid_data(revision.content_type, exc) from exc
+        return tuple(
+            ContentDataProblem(code=i.code, message=i.message, path=i.path)
+            for i in issues
+        )
+
     def delivery_data(self, revision: Revision) -> dict[str, object]:
         """Decode a snapshot and render nested blocks for the Delivery API."""
         entry = self._require(revision.content_type)

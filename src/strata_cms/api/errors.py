@@ -7,6 +7,7 @@ messages selected by exception type and never interpolate ``str(exception)``.
 
 from strata_cms.application.errors import (
     ContentNotFoundError,
+    ContentNotReadyError,
     ContentTypeUnavailableError,
     InvalidContentDataError,
     NotAuthorizedError,
@@ -33,6 +34,7 @@ _PUBLIC_DETAILS: tuple[tuple[type[Exception], str], ...] = (
     (RouteNotFoundError, "Route was not found."),
     (ContentTypeUnavailableError, "Content type is not available."),
     (InvalidContentDataError, "Content data is invalid."),
+    (ContentNotReadyError, "Content is not ready to be published."),
     (
         InvalidContentTypeKeyError,
         "Content type keys must be <= 200 chars and use lowercase namespaced "

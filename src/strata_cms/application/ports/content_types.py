@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
+from strata_cms.application.errors import ContentDataProblem
 from strata_cms.domain.revision import Revision, RevisionData
 from strata_cms.domain.value_objects import ContentTypeKey
 
@@ -31,6 +32,10 @@ class ContentTypeService(Protocol):
 
     def validate_revision(self, revision: Revision) -> None:
         """Require that one revision remains decodable by an installed type."""
+        ...  # pragma: no cover - protocol declaration
+
+    def publish_issues(self, revision: Revision) -> tuple[ContentDataProblem, ...]:
+        """Return publish-only readiness problems for one revision."""
         ...  # pragma: no cover - protocol declaration
 
     def delivery_data(self, revision: Revision) -> dict[str, object]:

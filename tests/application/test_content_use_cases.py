@@ -20,7 +20,12 @@ from strata_cms.application.content.use_cases import (
     publish_content,
     restore_content,
 )
-from strata_cms.application.errors import ContentNotFoundError, RevisionNotFoundError
+from strata_cms.application.errors import (
+    ContentDataProblem,
+    ContentNotFoundError,
+    ContentNotReadyError,
+    RevisionNotFoundError,
+)
 from strata_cms.application.ports.authorization import ContentAction, ContentActor
 from strata_cms.application.ports.content_types import PreparedContentData
 from strata_cms.application.ports.events import IntegrationEvent
@@ -50,6 +55,10 @@ POLICY = AllowAllPolicy()
 
 
 class FakeContentTypes:
+    def __init__(self) -> None:
+        self.readiness_problems: tuple[ContentDataProblem, ...] = ()
+        self.readiness_calls = 0
+
     def prepare_for_write(
         self,
         *,
@@ -65,6 +74,11 @@ class FakeContentTypes:
 
     def validate_revision(self, revision: Revision) -> None:
         del revision
+
+    def publish_issues(self, revision: Revision) -> tuple[ContentDataProblem, ...]:
+        del revision
+        self.readiness_calls += 1
+        return self.readiness_problems
 
     def delivery_data(self, revision: Revision) -> dict[str, object]:
         return revision.data.as_dict()
@@ -630,3 +644,86 @@ def test_archive_rejects_missing_content() -> None:
             policy=POLICY,
             actor=ACTOR_CONTEXT,
         )
+
+
+def _created_with_revision(
+    uow: FakeContentUnitOfWork, content_types: FakeContentTypes
+) -> tuple[ContentId, RevisionId]:
+    created = create_content(
+        CreateContent(
+            type_key=ContentTypeKey("tests.article"),
+            schema_version=1,
+            data={"title": "First"},
+            actor_id=ACTOR,
+        ),
+        uow=uow,
+        clock=FrozenClock(),
+        ids=SequenceIds(1, 2),
+        content_types=content_types,
+        policy=POLICY,
+        actor=ACTOR_CONTEXT,
+    )
+    return created.content_id, created.revision_id
+
+
+def test_create_revision_succeeds_when_readiness_has_issues() -> None:
+    content_types = FakeContentTypes()
+    content_types.readiness_problems = (
+        ContentDataProblem(code="fake_not_ready", message="Not ready."),
+    )
+    uow = FakeContentUnitOfWork()
+    content_id, _revision_id = _created_with_revision(uow, content_types)
+
+    second = create_revision(
+        CreateRevision(
+            content_id=content_id,
+            expected_version=1,
+            schema_version=1,
+            data={"title": "Second"},
+            actor_id=ACTOR,
+        ),
+        uow=uow,
+        clock=FrozenClock(),
+        ids=SequenceIds(3),
+        content_types=content_types,
+        policy=POLICY,
+        actor=ACTOR_CONTEXT,
+    )
+
+    assert second.revision_number == 2
+    assert content_types.readiness_calls == 0
+
+
+def test_publish_rejects_with_content_not_ready_and_does_not_publish() -> None:
+    content_types = FakeContentTypes()
+    content_types.readiness_problems = (
+        ContentDataProblem(
+            code="fake_not_ready", message="Not ready.", path="$.body[0].data.text"
+        ),
+    )
+    uow = FakeContentUnitOfWork()
+    content_id, revision_id = _created_with_revision(uow, content_types)
+
+    with pytest.raises(ContentNotReadyError) as raised:
+        publish_content(
+            PublishContent(
+                content_id=content_id,
+                revision_id=revision_id,
+                expected_version=1,
+                actor_id=ACTOR,
+            ),
+            uow=uow,
+            clock=FrozenClock(),
+            ids=SequenceIds(9),
+            content_types=content_types,
+            policy=POLICY,
+            actor=ACTOR_CONTEXT,
+        )
+
+    assert raised.value.type_key == ContentTypeKey("tests.article")
+    assert raised.value.problems[0].code == "fake_not_ready"
+    assert uow.events.items == []
+    persisted = uow.contents.get(content_id)
+    assert persisted is not None
+    assert persisted.published_revision_id is None
+    assert uow.committed is False

@@ -69,6 +69,21 @@ class InvalidContentDataError(ApplicationError, ValueError):
         self.problems = problems
 
 
+class ContentNotReadyError(ApplicationError, ValueError):
+    """Raised when a valid draft revision has publish-blocking problems."""
+
+    def __init__(
+        self,
+        *,
+        type_key: ContentTypeKey,
+        problems: tuple[ContentDataProblem, ...],
+    ) -> None:
+        """Capture the content type key and structured readiness problems."""
+        super().__init__(f"Content of type '{type_key}' is not ready to publish.")
+        self.type_key = type_key
+        self.problems = problems
+
+
 class RouteAlreadyAttachedError(ApplicationError, ValueError):
     """Raised when attaching a route to content that already has one."""
 

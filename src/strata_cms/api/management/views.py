@@ -40,6 +40,7 @@ from strata_cms.application.content.use_cases import (
 )
 from strata_cms.application.errors import (
     ContentNotFoundError,
+    ContentNotReadyError,
     ContentTypeUnavailableError,
     InvalidContentDataError,
     NotAuthorizedError,
@@ -75,6 +76,7 @@ from strata_cms.domain.errors import (
     RevisionOwnershipError,
     RouteCycleError,
 )
+from strata_cms.domain.revision import Revision
 from strata_cms.domain.value_objects import ContentId, ContentTypeKey, RevisionId
 from strata_cms.infrastructure.authorization.actor import build_content_actor
 
@@ -189,11 +191,24 @@ class ContentDocumentView(ManagementAPIView):
                 {"detail": "Content was not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        service = get_content_type_service()
         try:
-            prepared = get_content_type_service().prepare_for_write(
+            prepared = service.prepare_for_write(
                 type_key=document.type_key,
                 schema_version=document.schema_version,
                 data=document.data.as_dict(),
+            )
+            problems = service.publish_issues(
+                Revision(
+                    id=document.revision_id,
+                    content_id=document.content_id,
+                    number=document.revision_number,
+                    content_type=document.type_key,
+                    schema_version=document.schema_version,
+                    data=document.data,
+                    created_at=document.created_at,
+                    created_by=document.created_by,
+                )
             )
         except (ContentTypeUnavailableError, InvalidContentDataError) as exc:
             return _application_error(exc)
@@ -212,6 +227,10 @@ class ContentDocumentView(ManagementAPIView):
                     else None
                 ),
                 "is_archived": document.is_archived,
+                "publish_readiness": {
+                    "ready": not problems,
+                    "problems": [asdict(problem) for problem in problems],
+                },
             }
         )
 
@@ -376,6 +395,7 @@ class ContentPublishView(ManagementAPIView):
             ContentNotFoundError,
             RevisionNotFoundError,
             InvalidContentDataError,
+            ContentNotReadyError,
             ConcurrentModificationError,
             RevisionOwnershipError,
             ContentArchivedError,
@@ -634,10 +654,12 @@ def _application_error(error: Exception) -> Response:
         code = status.HTTP_409_CONFLICT
     elif isinstance(error, NotAuthorizedError):
         code = status.HTTP_403_FORBIDDEN
+    elif isinstance(error, ContentNotReadyError):
+        code = status.HTTP_422_UNPROCESSABLE_ENTITY
     else:
         code = status.HTTP_400_BAD_REQUEST
 
     payload: dict[str, object] = {"detail": public_error_detail(error)}
-    if isinstance(error, InvalidContentDataError):
+    if isinstance(error, (InvalidContentDataError, ContentNotReadyError)):
         payload["problems"] = [asdict(problem) for problem in error.problems]
     return Response(payload, status=code)
