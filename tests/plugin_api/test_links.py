@@ -79,19 +79,73 @@ def test_blob_from_json_rejects_reference_object() -> None:
         BlobReference.from_json({"$ref": str(U1)})
 
 
+def _scan(
+    data: dict[str, object],
+    refs: tuple[str, ...] = (),
+    blobs: tuple[str, ...] = (),
+) -> tuple[tuple[str, str], ...]:
+    found = find_undeclared_links(
+        data,
+        [LinkPath.parse(p) for p in refs],
+        [LinkPath.parse(p) for p in blobs],
+    )
+    return tuple((v.location, v.reason) for v in found)
+
+
 def test_find_undeclared_links_reports_extra_ref() -> None:
-    assert find_undeclared_links({"a": {"$ref": str(U1)}}, []) == ("a",)
+    assert _scan({"a": {"$ref": str(U1)}}) == (("a", "undeclared"),)
 
 
 def test_find_undeclared_links_ignores_declared_and_reports_others() -> None:
-    data = {
+    data: dict[str, object] = {
         "gallery": [{"image": {"$blob": str(U1)}}],
         "other": [{"$ref": str(U2)}],
     }
 
-    assert find_undeclared_links(data, [LinkPath.parse("gallery[*].image")]) == (
-        "other/0",
+    assert _scan(data, blobs=("gallery[*].image",)) == (("other/0", "undeclared"),)
+
+
+def test_find_undeclared_links_slash_in_key_cannot_collide_with_declared_path() -> None:
+    data: dict[str, object] = {
+        "a": {"b": {"$ref": str(U1)}},
+        "a/b": {"$ref": str(U1)},
+    }
+
+    assert _scan(data, refs=("a.b",)) == (("a~1b", "undeclared"),)
+
+
+def test_find_undeclared_links_reports_wrong_kind() -> None:
+    assert _scan({"a": {"b": {"$blob": str(U1)}}}, refs=("a.b",)) == (
+        ("a/b", "wrong_kind"),
     )
+    assert _scan({"a": {"$ref": str(U1)}}, blobs=("a",)) == (("a", "wrong_kind"),)
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        {"$ref": str(U1), "x": {"$ref": str(U2)}},
+        {"$ref": str(U1), "$blob": str(U2)},
+        {"$blob": str(U1), "x": 1},
+    ],
+)
+def test_find_undeclared_links_reports_malformed_link_objects(
+    link: dict[str, object],
+) -> None:
+    declared = _scan({"a": {"b": link}}, refs=("a.b",), blobs=("a.b",))
+    undeclared = _scan({"a": {"b": link}})
+
+    assert declared == (("a/b", "malformed"),)
+    assert undeclared == (("a/b", "malformed"),)
+
+
+def test_find_undeclared_links_accepts_correct_kind_at_declared_paths() -> None:
+    data: dict[str, object] = {
+        "r": {"$ref": str(U1)},
+        "g": [{"$blob": str(U2)}],
+    }
+
+    assert _scan(data, refs=("r",), blobs=("g[*]",)) == ()
 
 
 def test_reference_field_validates_cardinality() -> None:

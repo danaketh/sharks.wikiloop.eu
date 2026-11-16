@@ -42,6 +42,7 @@ from strata_cms.plugin_api.errors import (
     ReferenceTargetWithoutTitleError,
     RegistryConfigurationError,
     RegistryFrozenError,
+    SchemaDecodeError,
     UndeclaredPluginDependencyError,
     UnknownPluginOwnerError,
     UnknownReferenceTargetTypeError,
@@ -470,3 +471,98 @@ def test_reference_editor_field_requires_reference_types() -> None:
     )
     assert field.reference_types == (ContentTypeKey("tests.target"),)
     assert EditorInputKind.BLOB.value == "blob"
+
+
+def test_summary_title_untyped_rejects_wrong_value_type() -> None:
+    with pytest.raises(SchemaDecodeError):
+        _content("tests.page").summary_title_untyped("not a dict")
+
+
+def test_block_many_reference_links_collected_per_item() -> None:
+    block = BlockDefinition(
+        key=BlockTypeKey("tests.related"),
+        schema_version=1,
+        schema=_DictSchema(),
+        reference_fields=(
+            ReferenceFieldDefinition(
+                LinkPath.parse("items"),
+                frozenset({ContentTypeKey("tests.target")}),
+                many=True,
+            ),
+        ),
+    )
+    builder = StrataRegistryBuilder()
+    builder.register_plugin(_plugin("tests.a"))
+    registrar = builder.registrar_for(PluginKey("tests.a"))
+    registrar.register_block_type(block)
+    registrar.register_content_type(_content("tests.target"))
+    registry = builder.build(strata_version="0.1.0")
+    data = RevisionData.from_mapping(
+        {
+            "body": [
+                {
+                    "id": _U.format(1),
+                    "type": "tests.related",
+                    "version": 1,
+                    "data": {"items": [{"$ref": _U.format(2)}, {"$ref": _U.format(3)}]},
+                    "slots": {},
+                }
+            ]
+        }
+    )
+
+    found = registry.blocks.collect_links(data, (BlockFieldDefinition(("body",)),))
+
+    assert [(o.location, str(o.target)) for o in found] == [
+        (f"body/blocks/{_U.format(1)}/data/items/0", _U.format(2)),
+        (f"body/blocks/{_U.format(1)}/data/items/1", _U.format(3)),
+    ]
+
+
+def _block_with_ref(target: str) -> BlockDefinition[dict[str, object]]:
+    return BlockDefinition(
+        key=BlockTypeKey("tests.linker"),
+        schema_version=1,
+        schema=_DictSchema(),
+        reference_fields=(_ref("page", target),),
+    )
+
+
+def test_block_reference_to_unregistered_type_fails_compile() -> None:
+    builder = StrataRegistryBuilder()
+    builder.register_plugin(_plugin("tests.a"))
+    builder.registrar_for(PluginKey("tests.a")).register_block_type(
+        _block_with_ref("tests.missing")
+    )
+
+    with pytest.raises(UnknownReferenceTargetTypeError):
+        builder.build(strata_version="0.1.0")
+
+
+def test_block_reference_to_untitled_type_fails_compile() -> None:
+    builder = StrataRegistryBuilder()
+    builder.register_plugin(_plugin("tests.a"))
+    registrar = builder.registrar_for(PluginKey("tests.a"))
+    registrar.register_content_type(_content("tests.target", titled=False))
+    registrar.register_block_type(_block_with_ref("tests.target"))
+
+    with pytest.raises(ReferenceTargetWithoutTitleError):
+        builder.build(strata_version="0.1.0")
+
+
+def test_block_reference_to_other_plugin_type_requires_dependency() -> None:
+    def build(*, declare: bool) -> None:
+        builder = StrataRegistryBuilder()
+        core = _plugin("tests.core")
+        requires = (PluginRequirement(core.key, ">=1,<2"),) if declare else ()
+        builder.register_plugin(core)
+        builder.register_plugin(_plugin("tests.ext", requires=requires))
+        builder.registrar_for(core.key).register_content_type(_content("tests.target"))
+        builder.registrar_for(PluginKey("tests.ext")).register_block_type(
+            _block_with_ref("tests.target")
+        )
+        builder.build(strata_version="0.1.0")
+
+    with pytest.raises(UndeclaredPluginDependencyError):
+        build(declare=False)
+    build(declare=True)

@@ -172,6 +172,19 @@ class LinkOccurrence:
     target: UUID
 
 
+def join_location(trail: tuple[str, ...]) -> str:
+    """Join a key/index trail into a ``/`` location, escaping ``~`` and ``/``."""
+    return "/".join(part.replace("~", "~0").replace("/", "~1") for part in trail)
+
+
+def iter_link_trails(
+    data: Mapping[str, object],
+    path: LinkPath,
+) -> Iterator[tuple[tuple[str, ...], object]]:
+    """Yield ``(trail, raw value)`` for every match of ``path``."""
+    yield from _walk(data, path.segments, ())
+
+
 def iter_link_values(
     data: Mapping[str, object],
     path: LinkPath,
@@ -181,16 +194,17 @@ def iter_link_values(
     Locations are ``/``-joined, e.g. ``gallery/2/image``. Missing keys and
     values of the wrong container type yield nothing.
     """
-    yield from _walk(data, path.segments, ())
+    for trail, value in iter_link_trails(data, path):
+        yield join_location(trail), value
 
 
 def _walk(
     current: object,
     segments: tuple[str, ...],
     trail: tuple[str, ...],
-) -> Iterator[tuple[str, object]]:
+) -> Iterator[tuple[tuple[str, ...], object]]:
     if not segments:
-        yield "/".join(trail), current
+        yield trail, current
         return
     head, rest = segments[0], segments[1:]
     if head == WILDCARD:
@@ -202,38 +216,72 @@ def _walk(
         yield from _walk(current[head], rest, (*trail, head))
 
 
+@dataclass(frozen=True, slots=True)
+class LinkViolation:
+    """One link-encoding violation found by :func:`find_undeclared_links`."""
+
+    location: str
+    reason: Literal["undeclared", "wrong_kind", "malformed"]
+
+
 def find_undeclared_links(
     data: Mapping[str, object],
-    declared: Iterable[LinkPath],
-) -> tuple[str, ...]:
-    """Return locations of ``$ref``/``$blob`` objects outside declared paths."""
-    allowed = {
-        location
-        for path in declared
-        for location, _value in iter_link_values(data, path)
+    reference_paths: Iterable[LinkPath],
+    blob_paths: Iterable[LinkPath],
+) -> tuple[LinkViolation, ...]:
+    """Report every link-encoding violation in ``data``.
+
+    ``reference_paths``/``blob_paths`` are the declared ``link_path`` values.
+    Reported: a link object at an undeclared path (``undeclared``); a link
+    object whose kind differs from the kind declared there (``wrong_kind``);
+    any object with a ``$ref``/``$blob`` key that is not exactly a single-key
+    link object (``malformed``), wherever it appears. Paths are compared as
+    structural key/index trails, never as joined strings.
+
+    The scan covers whatever mapping it is given. A content-level payload
+    contains block envelopes whose ``data`` is governed by block definitions,
+    so callers must scan only the non-block data (omit the declared block
+    field subtrees) and scan each block's ``data`` separately against that
+    block type's own declared paths.
+    """
+    declared_refs = {
+        trail for path in reference_paths for trail, _ in iter_link_trails(data, path)
     }
-    found: list[str] = []
-    _scan(data, (), allowed, found)
+    declared_blobs = {
+        trail for path in blob_paths for trail, _ in iter_link_trails(data, path)
+    }
+    found: list[LinkViolation] = []
+    _scan(data, (), declared_refs, declared_blobs, found)
     return tuple(found)
 
 
 def _scan(
     current: object,
     trail: tuple[str, ...],
-    allowed: set[str],
-    found: list[str],
+    refs: set[tuple[str, ...]],
+    blobs: set[tuple[str, ...]],
+    found: list[LinkViolation],
 ) -> None:
     if isinstance(current, Mapping):
         if REF_KEY in current or BLOB_KEY in current:
-            location = "/".join(trail)
-            if location not in allowed:
-                found.append(location)
+            location = join_location(trail)
+            if set(current) == {REF_KEY}:
+                own, other = refs, blobs
+            elif set(current) == {BLOB_KEY}:
+                own, other = blobs, refs
+            else:
+                found.append(LinkViolation(location, "malformed"))
+                return
+            if trail in other:
+                found.append(LinkViolation(location, "wrong_kind"))
+            elif trail not in own:
+                found.append(LinkViolation(location, "undeclared"))
             return
         for key, child in current.items():
-            _scan(child, (*trail, str(key)), allowed, found)
+            _scan(child, (*trail, str(key)), refs, blobs, found)
     elif isinstance(current, list):
         for index, child in enumerate(current):
-            _scan(child, (*trail, str(index)), allowed, found)
+            _scan(child, (*trail, str(index)), refs, blobs, found)
 
 
 def require_unique_link_paths(
