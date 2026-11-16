@@ -250,12 +250,16 @@ class RoutePathRecord(models.Model):
         return f"path:{self.path}"
 
 
+TITLE_MAX_LENGTH = 255
+"""Bound for projected titles so the ``(type_key, title)`` btree never overflows."""
+
+
 class ContentTitleRecord(models.Model):
     """Rebuildable latest-draft title projection backing reference pickers."""
 
     content_id = models.UUIDField(primary_key=True, editable=False)
     type_key = models.CharField(max_length=200)
-    title = models.TextField(null=True, blank=True)
+    title = models.CharField(max_length=TITLE_MAX_LENGTH, null=True, blank=True)
     archived = models.BooleanField(default=False)
     updated_at = models.DateTimeField()
 

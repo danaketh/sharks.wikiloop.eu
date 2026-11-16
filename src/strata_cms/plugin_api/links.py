@@ -8,7 +8,7 @@ knowing the plugin schema. Any link object at an undeclared path is invalid.
 
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Self
 from uuid import UUID
 
@@ -176,7 +176,7 @@ class LinkOccurrence:
     location: str
     target: UUID
     allowed_types: frozenset[ContentTypeKey] = frozenset()
-    path: str = "$"
+    path: str = field(kw_only=True)
 
 
 def join_location(trail: tuple[str, ...]) -> str:

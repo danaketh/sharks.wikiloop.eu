@@ -8,12 +8,20 @@ from strata_cms.application.ports.content_types import ContentLinks
 from strata_cms.application.ports.links import LinkTarget
 from strata_cms.domain.value_objects import ContentId, ContentTypeKey, RevisionId
 from strata_cms.infrastructure.persistence.django.models import (
+    TITLE_MAX_LENGTH,
     ContentRecord,
     ContentReferenceRecord,
     ContentTitleRecord,
     MediaBlobRecord,
     MediaBlobUsageRecord,
 )
+
+
+def _projected_title(title: str | None) -> str | None:
+    """Strip and truncate so a long summary title never fails a revision write."""
+    if title is None:
+        return None
+    return title.strip()[:TITLE_MAX_LENGTH]
 
 
 class DjangoLinkTargetQueries:
@@ -80,7 +88,7 @@ class DjangoContentProjectionWriter:
             content_id=content_id,
             defaults={
                 "type_key": str(type_key),
-                "title": title,
+                "title": _projected_title(title),
                 "updated_at": self._clock.now(),
             },
         )

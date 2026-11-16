@@ -422,3 +422,20 @@ def test_rejected_links_leave_no_revision_or_projection() -> None:
     ]
     assert ContentTitleRecord.objects.get(pk=created.content_id).title == "Src"
     assert not ContentReferenceRecord.objects.exists()
+
+
+@pytest.mark.django_db
+def test_long_summary_title_is_truncated_not_rejected() -> None:
+    created = _create({"title": "x" * 10_000}, id_start=100)
+
+    title = ContentTitleRecord.objects.get(pk=created.content_id).title
+    assert title == "x" * 255
+
+
+@pytest.mark.django_db
+def test_title_projection_strips_whitespace_and_keeps_none() -> None:
+    padded = _create({"title": "  Padded  "}, id_start=100)
+    untitled = _create({}, id_start=200)
+
+    assert ContentTitleRecord.objects.get(pk=padded.content_id).title == "Padded"
+    assert ContentTitleRecord.objects.get(pk=untitled.content_id).title is None

@@ -509,7 +509,7 @@ class BlockTypeRegistry:
                             f"{base}/data/{location}",
                             ContentReference.from_json(raw).target,
                             reference.allowed_types,
-                            json_path_from_location(location, prefix=data_path),
+                            path=json_path_from_location(location, prefix=data_path),
                         )
                     )
             for blob in definition.blob_fields:
