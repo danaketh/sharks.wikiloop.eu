@@ -1,6 +1,6 @@
 """Django-optimized read queries for management content editing and delivery."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from strata_cms.application.content.queries import EditableContent, RevisionSummary
 from strata_cms.application.ports.content_delivery import PublishedRevision
@@ -174,3 +174,30 @@ class DjangoContentDeliveryQueries:
             if record.published_at is not None and record.published_revision is not None
         )
         return items, total
+
+    def published_revisions(
+        self, ids: frozenset[ContentId]
+    ) -> Mapping[ContentId, PublishedRevision]:
+        """Fetch published, non-archived targets among ``ids`` in one query."""
+        if not ids:
+            return {}
+        records = (
+            ContentRecord.objects.using(self._using)
+            .select_related("published_revision")
+            .filter(
+                pk__in=ids,
+                published_revision__isnull=False,
+                published_at__isnull=False,
+                archived_at__isnull=True,
+            )
+        )
+        return {
+            ContentId(record.id): PublishedRevision(
+                content_id=ContentId(record.id),
+                type_key=ContentTypeKey(record.type_key),
+                revision=revision_from_record(record.published_revision),
+                published_at=record.published_at,
+            )
+            for record in records
+            if record.published_at is not None and record.published_revision is not None
+        }

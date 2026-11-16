@@ -7,6 +7,7 @@ from strata_cms.application.content.delivery import (
     PublishedContent,
     get_published_content,
 )
+from strata_cms.application.content.links import LinkResolver
 from strata_cms.application.ports.cache import Cache
 from strata_cms.application.ports.content_delivery import ContentDeliveryQueries
 from strata_cms.application.ports.content_types import ContentTypeService
@@ -21,6 +22,7 @@ def get_published_content_by_path(
     content_types: ContentTypeService,
     cache: Cache | None = None,
     cache_ttl: timedelta = DEFAULT_DELIVERY_CACHE_TTL,
+    links: LinkResolver | None = None,
 ) -> PublishedContent | None:
     """Resolve a route path to its published content, if routed and published.
 
@@ -37,4 +39,5 @@ def get_published_content_by_path(
         content_types=content_types,
         cache=cache,
         cache_ttl=cache_ttl,
+        links=links,
     )

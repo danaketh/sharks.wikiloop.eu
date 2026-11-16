@@ -1,5 +1,6 @@
 """Django persistence adapters for the content route tree and path projection."""
 
+from collections.abc import Mapping
 from types import TracebackType
 from typing import Protocol
 
@@ -108,6 +109,17 @@ class DjangoRoutePathProjection:
         """Return the content item currently projected at this exact path."""
         record = RoutePathRecord.objects.using(self._using).filter(path=path).first()
         return ContentId(record.content_id) if record is not None else None
+
+    def paths_for(self, ids: frozenset[ContentId]) -> Mapping[ContentId, str]:
+        """Return projected paths of ``ids`` in one query (unrouted ids omitted)."""
+        if not ids:
+            return {}
+        rows = (
+            RoutePathRecord.objects.using(self._using)
+            .filter(content_id__in=ids)
+            .values_list("content_id", "path")
+        )
+        return {ContentId(content_id): path for content_id, path in rows}
 
 
 class _AtomicContext(Protocol):

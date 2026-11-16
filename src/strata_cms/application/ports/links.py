@@ -1,10 +1,11 @@
-"""Ports for write-time link target lookups and draft-scope link projections."""
+"""Ports for link target lookups, draft-scope projections and Delivery links."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
+from strata_cms.application.ports.content_delivery import PublishedRevision
 from strata_cms.application.ports.content_types import ContentLinks
 from strata_cms.domain.value_objects import ContentId, ContentTypeKey, RevisionId
 
@@ -49,4 +50,18 @@ class ContentProjectionWriter(Protocol):
 
     def set_archived(self, content_id: ContentId, archived: bool) -> None:
         """Mirror the content's archived flag into the title projection."""
+        ...  # pragma: no cover - protocol declaration
+
+
+class PublishedLinkQueries(Protocol):
+    """Batched published-state lookup of Delivery reference targets."""
+
+    def published_revisions(
+        self, ids: frozenset[ContentId]
+    ) -> Mapping[ContentId, PublishedRevision]:
+        """Return published, non-archived targets among ``ids`` in one query.
+
+        Unpublished, archived and missing ids are omitted; draft state is never
+        returned.
+        """
         ...  # pragma: no cover - protocol declaration

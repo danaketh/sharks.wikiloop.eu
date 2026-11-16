@@ -5,9 +5,43 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework.test import APIClient
 
+from strata_cms.api.delivery import views as delivery_views
+from strata_cms.application.content.commands import (
+    CreateContent,
+    CreateRevision,
+    PublishContent,
+)
+from strata_cms.application.content.results import ContentWriteResult
+from strata_cms.application.content.use_cases import (
+    create_content,
+    create_revision,
+    publish_content,
+)
+from strata_cms.application.ports.authorization import ContentAction, ContentActor
 from strata_cms.application.ports.search import SearchDocument
+from strata_cms.config import services
 from strata_cms.config.services import get_search_backend
+from strata_cms.domain.revision import RevisionData
+from strata_cms.domain.value_objects import ActorId, ContentTypeKey
 from strata_cms.examples.simple_article import EXAMPLE_CONTENT_TYPE
+from strata_cms.infrastructure.clock.system import DjangoClock
+from strata_cms.infrastructure.content_types import RegistryContentTypeService
+from strata_cms.infrastructure.ids.uuid import Uuid4Generator
+from strata_cms.infrastructure.persistence.django.projections import (
+    DjangoLinkTargetQueries,
+)
+from strata_cms.infrastructure.persistence.django.unit_of_work import (
+    DjangoContentUnitOfWork,
+)
+from strata_cms.plugin_api import (
+    ContentTypeDefinition,
+    LinkPath,
+    PluginDefinition,
+    PluginKey,
+    ReferenceFieldDefinition,
+    StrataRegistryBuilder,
+    ValidationIssue,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -286,3 +320,166 @@ def test_publishing_content_does_not_appear_in_search_until_indexed() -> None:
 
     assert response.status_code == 200
     assert response.json()["count"] == 0
+
+
+# --- reference resolution ----------------------------------------------------
+
+_SPECIES = ContentTypeKey("tests.species")
+_PROFILE = ContentTypeKey("tests.profile")
+_ACTOR = ActorId("user:1")
+_ACTOR_CONTEXT = ContentActor(id=_ACTOR, is_staff=True, permissions=frozenset())
+
+
+class _DictSchema:
+    value_type: type[dict[str, object]] = dict
+
+    def deserialize(self, data: RevisionData) -> dict[str, object]:
+        return data.as_dict()
+
+    def serialize(self, value: dict[str, object]) -> RevisionData:
+        return RevisionData.from_mapping(value)
+
+    def validate(self, value: dict[str, object]) -> tuple[ValidationIssue, ...]:
+        del value
+        return ()
+
+
+class _AllowAll:
+    def authorize(self, actor: ContentActor, action: ContentAction) -> None:
+        del actor, action
+
+
+def _reference_service() -> RegistryContentTypeService:
+    builder = StrataRegistryBuilder()
+    plugin = PluginDefinition(
+        key=PluginKey("tests.refs"), version="1.0.0", requires_strata=">=0.1,<0.2"
+    )
+    builder.register_plugin(plugin)
+    registrar = builder.registrar_for(plugin.key)
+    registrar.register_content_type(
+        ContentTypeDefinition(
+            key=_SPECIES,
+            schema_version=1,
+            schema=_DictSchema(),
+            summary_title=lambda value: str(value.get("title", "")),
+        )
+    )
+    registrar.register_content_type(
+        ContentTypeDefinition(
+            key=_PROFILE,
+            schema_version=1,
+            schema=_DictSchema(),
+            reference_fields=(
+                ReferenceFieldDefinition(
+                    LinkPath.parse("related"), frozenset({_SPECIES})
+                ),
+            ),
+        )
+    )
+    return RegistryContentTypeService(builder.build(strata_version="0.1.0"))
+
+
+def _write(
+    content_types: RegistryContentTypeService,
+    type_key: ContentTypeKey,
+    data: dict[str, object],
+) -> ContentWriteResult:
+    return create_content(
+        CreateContent(type_key=type_key, schema_version=1, data=data, actor_id=_ACTOR),
+        uow=DjangoContentUnitOfWork(clock=DjangoClock()),
+        clock=DjangoClock(),
+        ids=Uuid4Generator(),
+        content_types=content_types,
+        link_targets=DjangoLinkTargetQueries(),
+        policy=_AllowAll(),
+        actor=_ACTOR_CONTEXT,
+    )
+
+
+def _publish_result(
+    content_types: RegistryContentTypeService, written: ContentWriteResult
+) -> int:
+    published = publish_content(
+        PublishContent(
+            content_id=written.content_id,
+            revision_id=written.revision_id,
+            expected_version=written.content_version,
+            actor_id=_ACTOR,
+        ),
+        uow=DjangoContentUnitOfWork(clock=DjangoClock()),
+        clock=DjangoClock(),
+        ids=Uuid4Generator(),
+        content_types=content_types,
+        policy=_AllowAll(),
+        actor=_ACTOR_CONTEXT,
+    )
+    return published.content_version
+
+
+def test_delivery_endpoint_never_returns_draft_target_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content_types = _reference_service()
+    monkeypatch.setattr(services, "get_content_type_service", lambda: content_types)
+    monkeypatch.setattr(
+        delivery_views, "get_content_type_service", lambda: content_types
+    )
+    target = _write(content_types, _SPECIES, {"title": "Published shark"})
+    target_version = _publish_result(content_types, target)
+    create_revision(
+        CreateRevision(
+            content_id=target.content_id,
+            expected_version=target_version,
+            schema_version=1,
+            data={"title": "Draft secret shark"},
+            actor_id=_ACTOR,
+        ),
+        uow=DjangoContentUnitOfWork(clock=DjangoClock()),
+        clock=DjangoClock(),
+        ids=Uuid4Generator(),
+        content_types=content_types,
+        link_targets=DjangoLinkTargetQueries(),
+        policy=_AllowAll(),
+        actor=_ACTOR_CONTEXT,
+    )
+    unpublished = _write(content_types, _SPECIES, {"title": "Never published"})
+    source = _write(
+        content_types,
+        _PROFILE,
+        {
+            "related": {"$ref": str(target.content_id)},
+            "other": "x",
+        },
+    )
+    _publish_result(content_types, source)
+    draft_only_source = _write(
+        content_types,
+        _PROFILE,
+        {"related": {"$ref": str(unpublished.content_id)}},
+    )
+    _publish_result(content_types, draft_only_source)
+
+    anonymous = APIClient()
+    response = anonymous.get(
+        reverse("api:delivery:content-detail", args=[source.content_id])
+    )
+    unpublished_response = anonymous.get(
+        reverse("api:delivery:content-detail", args=[draft_only_source.content_id])
+    )
+    listing = anonymous.get(reverse("api:delivery:content-list"))
+
+    assert response.status_code == 200
+    assert response.json()["data"]["related"] == {
+        "id": str(target.content_id),
+        "type": str(_SPECIES),
+        "title": "Published shark",
+        "path": None,
+    }
+    assert "Draft secret" not in response.content.decode()
+    assert unpublished_response.json()["data"]["related"] is None
+    assert "Never published" not in unpublished_response.content.decode()
+    by_id = {item["content_id"]: item for item in listing.json()["results"]}
+    assert by_id[str(source.content_id)]["data"]["related"]["title"] == (
+        "Published shark"
+    )
+    assert "Draft secret" not in listing.content.decode()

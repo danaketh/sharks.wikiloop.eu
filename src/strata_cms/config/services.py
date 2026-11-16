@@ -4,6 +4,7 @@ from functools import lru_cache
 
 from django.conf import settings
 
+from strata_cms.application.content.links import LinkResolver
 from strata_cms.application.content.search_indexing import reindex_from_event
 from strata_cms.application.ports.authorization import ContentAuthorizationPolicy
 from strata_cms.application.ports.cache import Cache
@@ -151,6 +152,17 @@ def get_media_file_store() -> MediaFileStore:
 def get_media_blob_repository() -> MediaBlobRepository:
     """Return the Django-backed media blob metadata repository."""
     return DjangoMediaBlobRepository()
+
+
+def get_link_resolver() -> LinkResolver:
+    """Return the Delivery link resolver over published state only."""
+    return LinkResolver(
+        queries=DjangoContentDeliveryQueries(),
+        content_types=get_content_type_service(),
+        blobs=get_media_blob_repository(),
+        files=get_media_file_store(),
+        routes=get_route_path_projection(),
+    )
 
 
 def get_media_max_upload_bytes() -> int:

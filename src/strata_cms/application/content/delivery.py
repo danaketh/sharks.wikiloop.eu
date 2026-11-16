@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from strata_cms.application.content.links import LinkResolver
 from strata_cms.application.ports.cache import Cache
 from strata_cms.application.ports.content_delivery import ContentDeliveryQueries
 from strata_cms.application.ports.content_types import ContentTypeService
@@ -41,8 +42,13 @@ def get_published_content(
     content_types: ContentTypeService,
     cache: Cache | None = None,
     cache_ttl: timedelta = DEFAULT_DELIVERY_CACHE_TTL,
+    links: LinkResolver | None = None,
 ) -> PublishedContent | None:
-    """Return the current public revision rendered for delivery, if published."""
+    """Return the current public revision rendered for delivery, if published.
+
+    With ``links``, ``$ref``/``$blob`` links are resolved before caching, so the
+    cached value is the resolved output (refreshed only by the cache TTL).
+    """
     cache_key = f"strata:delivery:content:{content_id}"
     if cache is not None:
         cached = cache.get(cache_key)
@@ -53,6 +59,8 @@ def get_published_content(
     if published is None:
         return None
     data = content_types.delivery_data(published.revision)
+    if links is not None:
+        data = links.resolve(data)
     result = PublishedContent(
         content_id=published.content_id,
         type_key=published.type_key,
@@ -66,7 +74,7 @@ def get_published_content(
     return result
 
 
-def list_published_content(
+def list_published_content(  # noqa: PLR0913 - keyword-only injected ports, one per dependency
     *,
     type_key: ContentTypeKey | None,
     limit: int,
@@ -75,8 +83,12 @@ def list_published_content(
     content_types: ContentTypeService,
     cache: Cache | None = None,
     cache_ttl: timedelta = DEFAULT_DELIVERY_CACHE_TTL,
+    links: LinkResolver | None = None,
 ) -> PublishedContentPage:
-    """Return one page of published content, optionally filtered by type."""
+    """Return one page of published content, optionally filtered by type.
+
+    With ``links``, the whole page is resolved in one batch before caching.
+    """
     cache_key = f"strata:delivery:content-list:{type_key or '_all'}:{limit}:{offset}"
     if cache is not None:
         cached = cache.get(cache_key)
@@ -88,6 +100,9 @@ def list_published_content(
         limit=limit,
         offset=offset,
     )
+    documents = tuple(content_types.delivery_data(item.revision) for item in raw_items)
+    if links is not None:
+        documents = links.resolve_many(documents)
     items = tuple(
         PublishedContent(
             content_id=item.content_id,
@@ -95,9 +110,9 @@ def list_published_content(
             revision_id=item.revision.id,
             revision_number=item.revision.number,
             published_at=item.published_at,
-            data=content_types.delivery_data(item.revision),
+            data=data,
         )
-        for item in raw_items
+        for item, data in zip(raw_items, documents, strict=True)
     )
     page = PublishedContentPage(
         items=items,

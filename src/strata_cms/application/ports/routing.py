@@ -1,5 +1,6 @@
 """Application-owned ports for the content route tree and path projection."""
 
+from collections.abc import Mapping
 from typing import Protocol
 
 from strata_cms.domain.route import ContentRoute
@@ -56,4 +57,8 @@ class RoutePathProjection(Protocol):
 
     def resolve(self, path: str) -> ContentId | None:
         """Return the content item currently projected at this exact path."""
+        ...  # pragma: no cover - protocol declaration
+
+    def paths_for(self, ids: frozenset[ContentId]) -> Mapping[ContentId, str]:
+        """Return projected paths of ``ids`` in one lookup (unrouted ids omitted)."""
         ...  # pragma: no cover - protocol declaration

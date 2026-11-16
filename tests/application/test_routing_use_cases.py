@@ -1,4 +1,5 @@
 import copy
+from collections.abc import Mapping
 from types import TracebackType
 from uuid import UUID
 
@@ -91,6 +92,9 @@ class FakeRoutePathProjection:
             if stored == path:
                 return content_id
         return None
+
+    def paths_for(self, ids: frozenset[ContentId]) -> Mapping[ContentId, str]:
+        return {key: path for key, path in self.paths.items() if key in ids}
 
 
 class FakeRouteUnitOfWork:

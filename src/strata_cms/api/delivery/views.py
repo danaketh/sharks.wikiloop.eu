@@ -26,6 +26,7 @@ from strata_cms.config.services import (
     get_cache,
     get_content_delivery_queries,
     get_content_type_service,
+    get_link_resolver,
     get_route_path_projection,
     get_search_backend,
 )
@@ -55,6 +56,7 @@ class ContentDeliveryView(DeliveryAPIView):
             queries=get_content_delivery_queries(),
             content_types=get_content_type_service(),
             cache=get_cache(),
+            links=get_link_resolver(),
         )
         if published is None:
             return Response(
@@ -103,6 +105,7 @@ class ContentDeliveryListView(DeliveryAPIView):
             queries=get_content_delivery_queries(),
             content_types=get_content_type_service(),
             cache=get_cache(),
+            links=get_link_resolver(),
         )
         return Response(
             {
@@ -130,6 +133,7 @@ class RouteResolutionView(DeliveryAPIView):
             queries=get_content_delivery_queries(),
             content_types=get_content_type_service(),
             cache=get_cache(),
+            links=get_link_resolver(),
         )
         if published is None:
             return Response(
