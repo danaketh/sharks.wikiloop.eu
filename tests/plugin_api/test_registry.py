@@ -12,12 +12,21 @@ from strata_cms.examples.simple_article import (
     register_example,
 )
 from strata_cms.plugin_api import (
+    BlobFieldDefinition,
+    BlockDefinition,
+    BlockFieldDefinition,
+    BlockSlotDefinition,
+    BlockTypeKey,
     ContentTypeDefinition,
     ContentValidationError,
+    EditorInputKind,
     InvalidSchemaMigrationError,
+    LinkPath,
     PluginDefinition,
     PluginKey,
     PluginRequirement,
+    ReferenceFieldDefinition,
+    ScalarEditorField,
     SchemaMigration,
     SchemaMigrationSet,
     StrataRegistryBuilder,
@@ -30,9 +39,12 @@ from strata_cms.plugin_api.errors import (
     IncompatiblePluginVersionError,
     MissingPluginDependencyError,
     PluginDependencyCycleError,
+    ReferenceTargetWithoutTitleError,
     RegistryConfigurationError,
     RegistryFrozenError,
+    UndeclaredPluginDependencyError,
     UnknownPluginOwnerError,
+    UnknownReferenceTargetTypeError,
     UnsupportedPluginAPIVersionError,
     UnsupportedSchemaVersionError,
 )
@@ -276,3 +288,185 @@ def test_plugin_rejects_duplicate_dependency_declarations() -> None:
                 PluginRequirement(dependency, "<2"),
             ),
         )
+
+
+# --- typed reference and blob links -------------------------------------------
+
+_U = "00000000-0000-0000-0000-00000000000{}"
+
+
+class _DictSchema:
+    value_type: type[dict[str, object]] = dict
+
+    def deserialize(self, data: RevisionData) -> dict[str, object]:
+        return data.as_dict()
+
+    def serialize(self, value: dict[str, object]) -> RevisionData:
+        return RevisionData.from_mapping(value)
+
+    def validate(self, value: dict[str, object]) -> tuple[ValidationIssue, ...]:
+        del value
+        return ()
+
+
+def _title(value: dict[str, object]) -> str:
+    return str(value.get("title", ""))
+
+
+def _content(
+    key: str,
+    *,
+    refs: tuple[ReferenceFieldDefinition, ...] = (),
+    titled: bool = True,
+) -> ContentTypeDefinition[dict[str, object]]:
+    return ContentTypeDefinition(
+        key=ContentTypeKey(key),
+        schema_version=1,
+        schema=_DictSchema(),
+        reference_fields=refs,
+        summary_title=_title if titled else None,
+    )
+
+
+def _ref(path: str, *targets: str) -> ReferenceFieldDefinition:
+    return ReferenceFieldDefinition(
+        LinkPath.parse(path), frozenset(ContentTypeKey(t) for t in targets)
+    )
+
+
+def test_reference_to_unregistered_type_fails_compile() -> None:
+    builder = StrataRegistryBuilder()
+    builder.register_plugin(_plugin("tests.a"))
+    builder.registrar_for(PluginKey("tests.a")).register_content_type(
+        _content("tests.page", refs=(_ref("link", "tests.missing"),))
+    )
+
+    with pytest.raises(UnknownReferenceTargetTypeError):
+        builder.build(strata_version="0.1.0")
+
+
+def test_reference_to_type_without_summary_title_fails_compile() -> None:
+    builder = StrataRegistryBuilder()
+    builder.register_plugin(_plugin("tests.a"))
+    registrar = builder.registrar_for(PluginKey("tests.a"))
+    registrar.register_content_type(_content("tests.target", titled=False))
+    registrar.register_content_type(
+        _content("tests.page", refs=(_ref("link", "tests.target"),))
+    )
+
+    with pytest.raises(ReferenceTargetWithoutTitleError):
+        builder.build(strata_version="0.1.0")
+
+
+def test_reference_to_titled_type_compiles() -> None:
+    builder = StrataRegistryBuilder()
+    builder.register_plugin(_plugin("tests.a"))
+    registrar = builder.registrar_for(PluginKey("tests.a"))
+    registrar.register_content_type(_content("tests.target"))
+    registrar.register_content_type(
+        _content("tests.page", refs=(_ref("link", "tests.target"),))
+    )
+
+    builder.build(strata_version="0.1.0")
+    assert _content("tests.target").summary_title_untyped({"title": "T"}) == "T"
+    assert _content("tests.x", titled=False).summary_title_untyped({}) is None
+
+
+def test_reference_to_other_plugin_type_requires_dependency() -> None:
+    def build(*, declare: bool) -> None:
+        builder = StrataRegistryBuilder()
+        core = _plugin("tests.core")
+        requires = (PluginRequirement(core.key, ">=1,<2"),) if declare else ()
+        builder.register_plugin(core)
+        builder.register_plugin(_plugin("tests.ext", requires=requires))
+        builder.registrar_for(core.key).register_content_type(_content("tests.target"))
+        builder.registrar_for(PluginKey("tests.ext")).register_content_type(
+            _content("tests.page", refs=(_ref("link", "tests.target"),))
+        )
+        builder.build(strata_version="0.1.0")
+
+    with pytest.raises(UndeclaredPluginDependencyError):
+        build(declare=False)
+    build(declare=True)
+
+
+def test_duplicate_link_paths_rejected() -> None:
+    with pytest.raises(RegistryConfigurationError):
+        _content(
+            "tests.page",
+            refs=(_ref("link", "tests.t"), _ref("link", "tests.t")),
+        )
+
+
+def test_block_links_collected_with_block_uuid_location() -> None:
+    block = BlockDefinition(
+        key=BlockTypeKey("tests.image"),
+        schema_version=1,
+        schema=_DictSchema(),
+        reference_fields=(_ref("page", "tests.target"),),
+        blob_fields=(BlobFieldDefinition(LinkPath.parse("image")),),
+        slots=(BlockSlotDefinition("children"),),
+    )
+    builder = StrataRegistryBuilder()
+    builder.register_plugin(_plugin("tests.a"))
+    registrar = builder.registrar_for(PluginKey("tests.a"))
+    registrar.register_block_type(block)
+    registrar.register_content_type(_content("tests.target"))
+    registry = builder.build(strata_version="0.1.0")
+    outer, inner = _U.format(1), _U.format(2)
+    child = {
+        "id": inner,
+        "type": "tests.image",
+        "version": 1,
+        "data": {"image": {"$blob": _U.format(5)}},
+        "slots": {},
+    }
+    data = RevisionData.from_mapping(
+        {
+            "body": [
+                {
+                    "id": outer,
+                    "type": "tests.image",
+                    "version": 1,
+                    "data": {
+                        "image": {"$blob": _U.format(3)},
+                        "page": {"$ref": _U.format(4)},
+                    },
+                    "slots": {"children": [child]},
+                }
+            ]
+        }
+    )
+
+    found = registry.blocks.collect_links(data, (BlockFieldDefinition(("body",)),))
+
+    assert [(o.kind, o.location, str(o.target)) for o in found] == [
+        ("reference", f"body/blocks/{outer}/data/page", _U.format(4)),
+        ("blob", f"body/blocks/{outer}/data/image", _U.format(3)),
+        (
+            "blob",
+            f"body/blocks/{outer}/slots/children/blocks/{inner}/data/image",
+            _U.format(5),
+        ),
+    ]
+
+
+def test_reference_editor_field_requires_reference_types() -> None:
+    with pytest.raises(RegistryConfigurationError):
+        ScalarEditorField(
+            path=("link",), label="Link", input_kind=EditorInputKind.REFERENCE
+        )
+    with pytest.raises(RegistryConfigurationError):
+        ScalarEditorField(
+            path=("link",),
+            label="Link",
+            reference_types=(ContentTypeKey("tests.target"),),
+        )
+    field = ScalarEditorField(
+        path=("link",),
+        label="Link",
+        input_kind=EditorInputKind.REFERENCE,
+        reference_types=(ContentTypeKey("tests.target"),),
+    )
+    assert field.reference_types == (ContentTypeKey("tests.target"),)
+    assert EditorInputKind.BLOB.value == "blob"

@@ -38,14 +38,24 @@ from strata_cms.plugin_api.errors import (
     IncompatiblePluginVersionError,
     MissingPluginDependencyError,
     PluginDependencyCycleError,
+    ReferenceTargetWithoutTitleError,
     RegistryFrozenError,
     SchemaDecodeError,
     UndeclaredPluginDependencyError,
     UnknownBlockReferenceError,
     UnknownPluginOwnerError,
+    UnknownReferenceTargetTypeError,
     UnsupportedPluginAPIVersionError,
 )
 from strata_cms.plugin_api.keys import PluginKey
+from strata_cms.plugin_api.links import (
+    BlobFieldDefinition,
+    BlobReference,
+    ContentReference,
+    LinkOccurrence,
+    ReferenceFieldDefinition,
+    iter_link_values,
+)
 from strata_cms.plugin_api.schema import ValidationIssue
 
 STRATA_PLUGIN_API_VERSION = 1
@@ -78,6 +88,30 @@ class RegisteredContentType(Protocol):
     @property
     def editor(self) -> ContentEditorDefinition | None:
         """Return optional presentation-neutral editing metadata."""
+        ...  # pragma: no cover - protocol declaration
+
+    @property
+    def reference_fields(self) -> tuple[ReferenceFieldDefinition, ...]:
+        """Return typed content-reference fields in the content payload."""
+        ...  # pragma: no cover - protocol declaration
+
+    @property
+    def blob_fields(self) -> tuple[BlobFieldDefinition, ...]:
+        """Return blob link fields in the content payload."""
+        ...  # pragma: no cover - protocol declaration
+
+    @property
+    def has_summary_title(self) -> bool:
+        """Return whether reference summaries can show a title for this type."""
+        ...  # pragma: no cover - protocol declaration
+
+    @property
+    def embed_in_references(self) -> bool:
+        """Return whether summaries embed this type's data in references."""
+        ...  # pragma: no cover - protocol declaration
+
+    def summary_title_untyped(self, value: object) -> str | None:
+        """Return the summary title for a decoded value, if declared."""
         ...  # pragma: no cover - protocol declaration
 
     def migrate_data(
@@ -132,6 +166,16 @@ class RegisteredBlockType(Protocol):
     @property
     def editor(self) -> BlockEditorDefinition | None:
         """Return optional presentation-neutral editing metadata."""
+        ...  # pragma: no cover - protocol declaration
+
+    @property
+    def reference_fields(self) -> tuple[ReferenceFieldDefinition, ...]:
+        """Return typed content-reference fields in the block data."""
+        ...  # pragma: no cover - protocol declaration
+
+    @property
+    def blob_fields(self) -> tuple[BlobFieldDefinition, ...]:
+        """Return blob link fields in the block data."""
         ...  # pragma: no cover - protocol declaration
 
     def decode_untyped(self, *, schema_version: int, data: RevisionData) -> object:
@@ -342,6 +386,66 @@ class BlockTypeRegistry:
                 )
             )
         return tuple(issues)
+
+    def collect_links(
+        self,
+        data: RevisionData,
+        fields: tuple[BlockFieldDefinition, ...],
+    ) -> tuple[LinkOccurrence, ...]:
+        """Collect declared reference/blob links from every block, recursively.
+
+        Locations look like ``body/blocks/<block-uuid>/data/image``; nested
+        blocks continue with ``slots/<name>/blocks/<block-uuid>/data/...``.
+        ``data`` must already be normalized to current block schemas.
+        """
+        raw = data.as_dict()
+        found: list[LinkOccurrence] = []
+        for field in fields:
+            value = _read_path(raw, field.path)
+            if value is _MISSING:
+                continue
+            self._collect_collection_links(
+                BlockCollection.from_json(value),
+                prefix="/".join(field.path),
+                found=found,
+            )
+        return tuple(found)
+
+    def _collect_collection_links(
+        self,
+        collection: BlockCollection,
+        *,
+        prefix: str,
+        found: list[LinkOccurrence],
+    ) -> None:
+        for block in collection:
+            base = f"{prefix}/blocks/{block.id}"
+            definition = self.require(block.type_key).definition
+            block_data = block.data.as_dict()
+            for reference in definition.reference_fields:
+                for location, raw in iter_link_values(block_data, reference.link_path):
+                    found.append(
+                        LinkOccurrence(
+                            "reference",
+                            f"{base}/data/{location}",
+                            ContentReference.from_json(raw).target,
+                        )
+                    )
+            for blob in definition.blob_fields:
+                for location, raw in iter_link_values(block_data, blob.link_path):
+                    found.append(
+                        LinkOccurrence(
+                            "blob",
+                            f"{base}/data/{location}",
+                            BlobReference.from_json(raw).blob_id,
+                        )
+                    )
+            for name, children in block.slots:
+                self._collect_collection_links(
+                    children,
+                    prefix=f"{base}/slots/{name}",
+                    found=found,
+                )
 
     def _collection_publish_issues(
         self,
@@ -579,6 +683,7 @@ class StrataRegistryBuilder:
         )
         self._validate_definition_owners()
         self._validate_block_references()
+        self._validate_reference_targets()
         self._consumed = True
         return StrataRegistry(
             plugins=PluginRegistry(ordered_plugins),
@@ -624,6 +729,68 @@ class StrataRegistryBuilder:
                         f"'{'.'.join(field.path)}'"
                     ),
                 )
+
+    def _validate_reference_targets(self) -> None:
+        for content_entry in self._content_types.values():
+            for reference in content_entry.definition.reference_fields:
+                self._require_reference_targets(
+                    reference,
+                    owner=content_entry.owner,
+                    context=(
+                        f"content type '{content_entry.definition.key}' reference "
+                        f"field '{reference.path}'"
+                    ),
+                )
+        for block_entry in self._blocks.values():
+            for reference in block_entry.definition.reference_fields:
+                self._require_reference_targets(
+                    reference,
+                    owner=block_entry.owner,
+                    context=(
+                        f"block '{block_entry.definition.key}' reference field "
+                        f"'{reference.path}'"
+                    ),
+                )
+
+    def _require_reference_targets(
+        self,
+        reference: ReferenceFieldDefinition,
+        *,
+        owner: PluginKey,
+        context: str,
+    ) -> None:
+        targets = sorted(reference.allowed_types, key=str)
+        unknown = [key for key in targets if key not in self._content_types]
+        if unknown:
+            raise UnknownReferenceTargetTypeError(
+                f"{context} references unregistered content type(s): "
+                + ", ".join(str(key) for key in unknown)
+            )
+        untitled = [
+            key
+            for key in targets
+            if not self._content_types[key].definition.has_summary_title
+        ]
+        if untitled:
+            raise ReferenceTargetWithoutTitleError(
+                f"{context} targets content type(s) without a summary title: "
+                + ", ".join(str(key) for key in untitled)
+            )
+        dependencies = self._transitive_dependencies(owner)
+        foreign = sorted(
+            {
+                self._content_types[key].owner
+                for key in targets
+                if self._content_types[key].owner != owner
+                and self._content_types[key].owner not in dependencies
+            },
+            key=str,
+        )
+        if foreign:
+            raise UndeclaredPluginDependencyError(
+                f"{context} targets content types owned by undeclared plugin "
+                "dependency/dependencies: " + ", ".join(str(key) for key in foreign)
+            )
 
     def _require_known_blocks(
         self,

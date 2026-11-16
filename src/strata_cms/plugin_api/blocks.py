@@ -14,6 +14,11 @@ from strata_cms.plugin_api.errors import (
     RegistryConfigurationError,
     SchemaDecodeError,
 )
+from strata_cms.plugin_api.links import (
+    BlobFieldDefinition,
+    ReferenceFieldDefinition,
+    require_unique_link_paths,
+)
 from strata_cms.plugin_api.migrations import SchemaMigrationSet
 from strata_cms.plugin_api.schema import PublishReadiness, ValidationIssue
 
@@ -172,10 +177,15 @@ class BlockDefinition[T]:
     delivery: BlockDeliverySerializer[T] | None = None
     editor: BlockEditorDefinition | None = None
     readiness: PublishReadiness[T] | None = None
+    reference_fields: tuple[ReferenceFieldDefinition, ...] = ()
+    blob_fields: tuple[BlobFieldDefinition, ...] = ()
 
     def __post_init__(self) -> None:
-        """Validate migration history and unique slot names at registration."""
+        """Validate migration history, slot names and link paths at registration."""
         self.migrations.validate_for(self.schema_version)
+        require_unique_link_paths(
+            f"Block type '{self.key}'", self.reference_fields, self.blob_fields
+        )
         names = [slot.name for slot in self.slots]
         if len(names) != len(set(names)):
             raise RegistryConfigurationError(

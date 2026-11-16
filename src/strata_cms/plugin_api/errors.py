@@ -38,6 +38,14 @@ class UnknownBlockReferenceError(RegistryConfigurationError):
     """Raised when a definition references an unregistered block type."""
 
 
+class UnknownReferenceTargetTypeError(RegistryConfigurationError):
+    """Raised when a reference field targets an unregistered content type."""
+
+
+class ReferenceTargetWithoutTitleError(RegistryConfigurationError):
+    """Raised when a reference field targets a type without ``summary_title``."""
+
+
 class UnknownPluginOwnerError(RegistryConfigurationError):
     """Raised when a content type claims an unregistered owner plugin."""
 

@@ -1,5 +1,6 @@
 """Immutable plugin and content-type definitions."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -20,6 +21,11 @@ from strata_cms.plugin_api.errors import (
     SchemaDecodeError,
 )
 from strata_cms.plugin_api.keys import PluginKey
+from strata_cms.plugin_api.links import (
+    BlobFieldDefinition,
+    ReferenceFieldDefinition,
+    require_unique_link_paths,
+)
 from strata_cms.plugin_api.migrations import SchemaMigrationSet
 from strata_cms.plugin_api.schema import (
     ContentDeliverySerializer,
@@ -106,10 +112,17 @@ class ContentTypeDefinition[T]:
     block_fields: tuple[BlockFieldDefinition, ...] = ()
     editor: ContentEditorDefinition | None = None
     readiness: PublishReadiness[T] | None = None
+    reference_fields: tuple[ReferenceFieldDefinition, ...] = ()
+    blob_fields: tuple[BlobFieldDefinition, ...] = ()
+    summary_title: Callable[[T], str] | None = None
+    embed_in_references: bool = False
 
     def __post_init__(self) -> None:
-        """Validate schema history and declared structured-block fields."""
+        """Validate schema history and declared block and link fields."""
         self.migrations.validate_for(self.schema_version)
+        require_unique_link_paths(
+            f"Content type '{self.key}'", self.reference_fields, self.blob_fields
+        )
         if not block_fields_are_unique(self.block_fields):
             raise RegistryConfigurationError(
                 f"Content type '{self.key}' has duplicate block field paths."
@@ -217,6 +230,22 @@ class ContentTypeDefinition[T]:
                 f"{self.schema.value_type.__name__}, got {type(value).__name__}."
             )
         return self.readiness.publish_issues(value)
+
+    @property
+    def has_summary_title(self) -> bool:
+        """Return whether this type can be shown in reference summaries."""
+        return self.summary_title is not None
+
+    def summary_title_untyped(self, value: object) -> str | None:
+        """Return the human summary title for a decoded runtime value."""
+        if self.summary_title is None:
+            return None
+        if not isinstance(value, self.schema.value_type):
+            raise SchemaDecodeError(
+                f"Content type '{self.key}' expects "
+                f"{self.schema.value_type.__name__}, got {type(value).__name__}."
+            )
+        return self.summary_title(value)
 
     def _require_valid(self, value: T) -> None:
         issues = self.schema.validate(value)

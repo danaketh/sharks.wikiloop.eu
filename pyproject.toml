@@ -230,6 +230,7 @@ source_modules = [
   "strata_cms.plugin_api.editor",
   "strata_cms.plugin_api.errors",
   "strata_cms.plugin_api.keys",
+  "strata_cms.plugin_api.links",
   "strata_cms.plugin_api.markdown",
   "strata_cms.plugin_api.migrations",
   "strata_cms.plugin_api.registry",

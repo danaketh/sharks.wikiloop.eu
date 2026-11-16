@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from strata_cms.domain.revision import RevisionData
+from strata_cms.domain.value_objects import ContentTypeKey
 from strata_cms.plugin_api.errors import RegistryConfigurationError
 
 _FIELD_SEGMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -27,6 +28,8 @@ class EditorInputKind(StrEnum):
     DATETIME = "datetime"
     CHOICE = "choice"
     MULTI_CHOICE = "multi_choice"
+    REFERENCE = "reference"
+    BLOB = "blob"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,10 +59,16 @@ class ScalarEditorField:
     placeholder: str = ""
     read_only: bool = False
     choices: tuple[EditorChoice, ...] = ()
+    reference_types: tuple[ContentTypeKey, ...] = ()
 
     def __post_init__(self) -> None:
-        """Validate stable JSON paths and choice configuration."""
+        """Validate stable JSON paths and choice/reference configuration."""
         _validate_path(self.path)
+        if (self.input_kind is EditorInputKind.REFERENCE) != bool(self.reference_types):
+            raise RegistryConfigurationError(
+                "Editor reference types must be supplied exactly for the "
+                "reference input kind."
+            )
         if not self.label.strip():
             raise RegistryConfigurationError("Editor field labels cannot be blank.")
         choice_kind = self.input_kind in {
