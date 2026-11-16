@@ -29,6 +29,7 @@ from strata_cms.plugin_api.links import (
     ContentReference,
     iter_link_values,
     link_issues,
+    link_publish_issues,
 )
 from strata_cms.plugin_api.registry import RegisteredContentTypeEntry, StrataRegistry
 
@@ -94,6 +95,14 @@ class RegistryContentTypeService(ContentTypeService):
             )
             issues = entry.definition.publish_issues_untyped(value)
             issues += self._registry.blocks.publish_issues(
+                normalized,
+                entry.definition.block_fields,
+            )
+            issues += link_publish_issues(
+                _without_block_fields(normalized, entry.definition.block_fields),
+                entry.definition.reference_fields,
+            )
+            issues += self._registry.blocks.link_publish_issues(
                 normalized,
                 entry.definition.block_fields,
             )
@@ -199,6 +208,8 @@ class RegistryContentTypeService(ContentTypeService):
         blobs: list[ContentLink] = []
         for reference in definition.reference_fields:
             for location, raw in iter_link_values(plain, reference.link_path):
+                if raw is None and not reference.many:
+                    continue
                 references.append(
                     ContentLink(
                         "reference",
@@ -209,6 +220,8 @@ class RegistryContentTypeService(ContentTypeService):
                 )
         for blob in definition.blob_fields:
             for location, raw in iter_link_values(plain, blob.link_path):
+                if raw is None:
+                    continue
                 blobs.append(
                     ContentLink(
                         "blob",

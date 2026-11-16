@@ -56,6 +56,7 @@ from strata_cms.plugin_api.links import (
     ReferenceFieldDefinition,
     iter_link_values,
     link_issues,
+    link_publish_issues,
 )
 from strata_cms.plugin_api.schema import ValidationIssue
 
@@ -417,47 +418,68 @@ class BlockTypeRegistry:
         data: RevisionData,
         fields: tuple[BlockFieldDefinition, ...],
     ) -> tuple[ValidationIssue, ...]:
-        """Validate link encoding/cardinality in every block's data, recursively.
+        """Validate link encoding/max_items in every block's data, recursively.
 
         Each block's ``data`` is checked against its own block type's declared
         link paths, never the content type's. ``data`` must already be
         normalized to current block schemas.
         """
-        raw = data.as_dict()
         issues: list[ValidationIssue] = []
+        for block_data, path, definition in self._block_data(data, fields):
+            issues.extend(
+                link_issues(
+                    block_data,
+                    definition.reference_fields,
+                    definition.blob_fields,
+                    prefix=path,
+                )
+            )
+        return tuple(issues)
+
+    def link_publish_issues(
+        self,
+        data: RevisionData,
+        fields: tuple[BlockFieldDefinition, ...],
+    ) -> tuple[ValidationIssue, ...]:
+        """Report ``min_items`` shortfalls of many-reference fields in blocks."""
+        issues: list[ValidationIssue] = []
+        for block_data, path, definition in self._block_data(data, fields):
+            issues.extend(
+                link_publish_issues(
+                    block_data, definition.reference_fields, prefix=path
+                )
+            )
+        return tuple(issues)
+
+    def _block_data(
+        self,
+        data: RevisionData,
+        fields: tuple[BlockFieldDefinition, ...],
+    ) -> list[tuple[dict[str, object], str, RegisteredBlockType]]:
+        """Return ``(block data, $-style data path, definition)`` per block."""
+        raw = data.as_dict()
+        found: list[tuple[dict[str, object], str, RegisteredBlockType]] = []
         for field in fields:
             value = _read_path(raw, field.path)
             if value is _MISSING:
                 continue
-            self._collection_link_issues(
-                BlockCollection.from_json(value),
-                prefix="/".join(field.path),
-                issues=issues,
+            self._walk_block_data(
+                BlockCollection.from_json(value), _json_path(field.path), found
             )
-        return tuple(issues)
+        return found
 
-    def _collection_link_issues(
+    def _walk_block_data(
         self,
         collection: BlockCollection,
-        *,
-        prefix: str,
-        issues: list[ValidationIssue],
+        path: str,
+        found: list[tuple[dict[str, object], str, RegisteredBlockType]],
     ) -> None:
-        for block in collection:
-            base = f"{prefix}/blocks/{block.id}"
+        for index, block in enumerate(collection):
+            block_path = f"{path}[{index}]"
             definition = self.require(block.type_key).definition
-            issues.extend(
-                link_issues(
-                    block.data.as_dict(),
-                    definition.reference_fields,
-                    definition.blob_fields,
-                    prefix=f"{base}/data",
-                )
-            )
+            found.append((block.data.as_dict(), f"{block_path}.data", definition))
             for name, children in block.slots:
-                self._collection_link_issues(
-                    children, prefix=f"{base}/slots/{name}", issues=issues
-                )
+                self._walk_block_data(children, f"{block_path}.slots.{name}", found)
 
     def _collect_collection_links(
         self,
@@ -472,6 +494,8 @@ class BlockTypeRegistry:
             block_data = block.data.as_dict()
             for reference in definition.reference_fields:
                 for location, raw in iter_link_values(block_data, reference.link_path):
+                    if raw is None and not reference.many:
+                        continue
                     found.append(
                         LinkOccurrence(
                             "reference",
@@ -482,6 +506,8 @@ class BlockTypeRegistry:
                     )
             for blob in definition.blob_fields:
                 for location, raw in iter_link_values(block_data, blob.link_path):
+                    if raw is None:
+                        continue
                     found.append(
                         LinkOccurrence(
                             "blob",

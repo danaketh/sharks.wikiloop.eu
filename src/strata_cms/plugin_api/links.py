@@ -304,10 +304,20 @@ _VIOLATION_CODES = {
     "wrong_kind": "wrong_link_kind",
     "malformed": "malformed_link",
 }
+COUNT_CODE = "reference_count_out_of_range"
 
 
-def _located(prefix: str, location: str) -> str:
-    return f"{prefix}/{location}" if prefix else location
+def json_path_from_location(location: str, *, prefix: str = "$") -> str:
+    """Render a ``/`` link location as a ``$.a[0].b`` JSON path under ``prefix``.
+
+    All-digit segments are list indexes; every other key is rendered as
+    ``.key``, matching the other structural validation problems.
+    """
+    path = prefix
+    for part in location.split("/") if location else ():
+        key = part.replace("~1", "/").replace("~0", "~")
+        path += f"[{key}]" if key.isdigit() else f".{key}"
+    return path
 
 
 def link_issues(
@@ -315,15 +325,19 @@ def link_issues(
     references: Sequence[ReferenceFieldDefinition],
     blobs: Sequence[BlobFieldDefinition],
     *,
-    prefix: str = "",
+    prefix: str = "$",
 ) -> tuple[ValidationIssue, ...]:
-    """Validate link encoding and reference cardinality in one payload.
+    """Validate link encoding and reference ``max_items`` in one payload.
 
     ``data`` is scanned as given (see :func:`find_undeclared_links` for the
     block-envelope caveat) against the declared ``references``/``blobs``.
-    Issue paths are link locations, optionally under ``prefix``. Codes:
+    Issue paths are ``$.``-style JSON paths under ``prefix``. Codes:
     ``undeclared_link``, ``wrong_link_kind``, ``malformed_link`` and
-    ``reference_count_out_of_range``.
+    ``reference_count_out_of_range`` (too many only; a shortfall is a
+    publish-readiness issue, see :func:`link_publish_issues`).
+
+    ``null`` at a declared single link path, or for a ``many`` field, means
+    unset and is accepted; a ``null`` element inside a list is malformed.
     """
     violations = find_undeclared_links(
         data,
@@ -334,7 +348,7 @@ def link_issues(
         ValidationIssue(
             code=_VIOLATION_CODES[violation.reason],
             message=f"Invalid link at '{violation.location}': {violation.reason}.",
-            path=_located(prefix, violation.location),
+            path=json_path_from_location(violation.location, prefix=prefix),
         )
         for violation in violations
     ]
@@ -347,20 +361,24 @@ def link_issues(
                 ValidationIssue(
                     code="malformed_link",
                     message=message,
-                    path=_located(prefix, location),
+                    path=json_path_from_location(location, prefix=prefix),
                 )
             )
 
     for reference in references:
         for location, raw in iter_link_values(data, reference.link_path):
+            if raw is None and not reference.many:
+                continue
             try:
                 ContentReference.from_json(raw)
             except SchemaDecodeError as exc:
                 malformed(location, str(exc))
         if reference.many:
-            _check_cardinality(data, reference, prefix, issues, malformed)
+            _check_max_items(data, reference, prefix, issues, malformed)
     for blob in blobs:
         for location, raw in iter_link_values(data, blob.link_path):
+            if raw is None:
+                continue
             try:
                 BlobReference.from_json(raw)
             except SchemaDecodeError as exc:
@@ -368,7 +386,7 @@ def link_issues(
     return tuple(issues)
 
 
-def _check_cardinality(
+def _check_max_items(
     data: Mapping[str, object],
     reference: ReferenceFieldDefinition,
     prefix: str,
@@ -376,21 +394,55 @@ def _check_cardinality(
     malformed: Callable[[str, str], None],
 ) -> None:
     for location, raw in iter_link_values(data, reference.path):
+        if raw is None:
+            continue
         if not isinstance(raw, list):
             malformed(location, f"Reference list at '{location}' must be an array.")
             continue
-        count = len(raw)
-        too_few = count < reference.min_items
-        too_many = reference.max_items is not None and count > reference.max_items
-        if too_few or too_many:
-            upper = "unlimited" if reference.max_items is None else reference.max_items
+        if reference.max_items is not None and len(raw) > reference.max_items:
             issues.append(
                 ValidationIssue(
-                    code="reference_count_out_of_range",
+                    code=COUNT_CODE,
                     message=(
-                        f"Expected {reference.min_items} to {upper} references, "
-                        f"got {count}."
+                        f"Expected at most {reference.max_items} references, "
+                        f"got {len(raw)}."
                     ),
-                    path=_located(prefix, location),
+                    path=json_path_from_location(location, prefix=prefix),
                 )
             )
+
+
+def link_publish_issues(
+    data: Mapping[str, object],
+    references: Sequence[ReferenceFieldDefinition],
+    *,
+    prefix: str = "$",
+) -> tuple[ValidationIssue, ...]:
+    """Report ``min_items`` shortfalls of ``many`` reference fields.
+
+    Absent and ``null`` fields count as zero references. This is a
+    publish-readiness check: incomplete drafts remain writable.
+    """
+    issues: list[ValidationIssue] = []
+    for reference in references:
+        if not reference.many or reference.min_items == 0:
+            continue
+        values = list(iter_link_values(data, reference.path))
+        if not values:
+            values = [("/".join(reference.path.segments), None)]
+        for location, raw in values:
+            if raw is not None and not isinstance(raw, list):
+                continue
+            count = 0 if raw is None else len(raw)
+            if count < reference.min_items:
+                issues.append(
+                    ValidationIssue(
+                        code=COUNT_CODE,
+                        message=(
+                            f"Expected at least {reference.min_items} references, "
+                            f"got {count}."
+                        ),
+                        path=json_path_from_location(location, prefix=prefix),
+                    )
+                )
+    return tuple(issues)
