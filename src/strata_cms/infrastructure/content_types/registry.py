@@ -167,8 +167,8 @@ class RegistryContentTypeService(ContentTypeService):
         """Return whether the type opts into embedded reference summaries."""
         return self._require(type_key).definition.embed_in_references
 
-    def blob_ids(self, revision: Revision) -> frozenset[UUID]:
-        """Return blob ids linked from a revision after in-memory migration."""
+    def revision_links(self, revision: Revision) -> ContentLinks:
+        """Return declared links of a revision after in-memory migration."""
         entry = self._require(revision.content_type)
         try:
             normalized, _value = self._normalize_and_decode(
@@ -176,10 +176,13 @@ class RegistryContentTypeService(ContentTypeService):
                 schema_version=revision.schema_version,
                 data=revision.data,
             )
-            links = self._extract_links(entry, normalized)
+            return self._extract_links(entry, normalized)
         except (InvalidRevisionDataError, SchemaError) as exc:
             raise self._invalid_data(revision.content_type, exc) from exc
-        return frozenset(link.target for link in links.blobs)
+
+    def blob_ids(self, revision: Revision) -> frozenset[UUID]:
+        """Return blob ids linked from a revision after in-memory migration."""
+        return frozenset(link.target for link in self.revision_links(revision).blobs)
 
     def _link_problems(
         self,

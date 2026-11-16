@@ -1,4 +1,5 @@
-from uuid import UUID
+from datetime import timedelta
+from uuid import UUID, uuid4
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -22,19 +23,21 @@ from strata_cms.application.content.use_cases import (
 from strata_cms.application.ports.authorization import ContentAction, ContentActor
 from strata_cms.application.ports.search import SearchDocument
 from strata_cms.config import services
-from strata_cms.config.services import get_search_backend
+from strata_cms.config.services import dispatch_content_event, get_search_backend
 from strata_cms.domain.revision import RevisionData
 from strata_cms.domain.value_objects import ActorId, ContentTypeKey
 from strata_cms.examples.simple_article import EXAMPLE_CONTENT_TYPE
 from strata_cms.infrastructure.clock.system import DjangoClock
 from strata_cms.infrastructure.content_types import RegistryContentTypeService
 from strata_cms.infrastructure.ids.uuid import Uuid4Generator
+from strata_cms.infrastructure.persistence.django.outbox import DjangoOutboxQueue
 from strata_cms.infrastructure.persistence.django.projections import (
     DjangoLinkTargetQueries,
 )
 from strata_cms.infrastructure.persistence.django.unit_of_work import (
     DjangoContentUnitOfWork,
 )
+from strata_cms.infrastructure.tasks.worker import run_worker_batch
 from strata_cms.plugin_api import (
     ContentTypeDefinition,
     LinkPath,
@@ -328,6 +331,7 @@ def test_publishing_content_does_not_appear_in_search_until_indexed() -> None:
 
 _SPECIES = ContentTypeKey("tests.species")
 _PROFILE = ContentTypeKey("tests.profile")
+_GUIDE = ContentTypeKey("tests.guide")
 _ACTOR = ActorId("user:1")
 _ACTOR_CONTEXT = ContentActor(id=_ACTOR, is_staff=True, permissions=frozenset())
 
@@ -377,6 +381,18 @@ def _reference_service() -> RegistryContentTypeService:
                 ),
                 ReferenceFieldDefinition(
                     LinkPath.parse("items"), frozenset({_SPECIES}), many=True
+                ),
+            ),
+        )
+    )
+    registrar.register_content_type(
+        ContentTypeDefinition(
+            key=_GUIDE,
+            schema_version=1,
+            schema=_DictSchema(),
+            reference_fields=(
+                ReferenceFieldDefinition(
+                    LinkPath.parse("related"), frozenset({_SPECIES})
                 ),
             ),
         )
@@ -536,3 +552,167 @@ def test_delivery_endpoint_omits_archived_reference_targets(
     assert data["related"] is None
     assert [item["id"] for item in data["items"]] == [str(kept.content_id)]
     assert "Archived shark" not in response.content.decode()
+
+
+# --- referenced-by -----------------------------------------------------------
+
+
+def _use_reference_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> RegistryContentTypeService:
+    content_types = _reference_service()
+    monkeypatch.setattr(services, "get_content_type_service", lambda: content_types)
+    monkeypatch.setattr(
+        delivery_views, "get_content_type_service", lambda: content_types
+    )
+    return content_types
+
+
+def _drain_events() -> None:
+    queue = DjangoOutboxQueue(worker_id="test-worker")
+    while run_worker_batch(
+        queue,
+        dispatch=dispatch_content_event,
+        visibility_timeout=timedelta(seconds=30),
+    ):
+        pass
+
+
+def _referenced_by(content_id: UUID, **params: str | int) -> dict[str, object]:
+    response = APIClient().get(
+        reverse("api:delivery:content-referenced-by", args=[content_id]), params
+    )
+    assert response.status_code == 200, response.content
+    body: dict[str, object] = response.json()
+    return body
+
+
+def _item_ids(body: dict[str, object]) -> list[str]:
+    items = body["items"]
+    assert isinstance(items, list)
+    return [item["content_id"] for item in items]
+
+
+def test_referenced_by_lists_only_published_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content_types = _use_reference_types(monkeypatch)
+    target = _write(content_types, _SPECIES, {"title": "Great white"})
+    _publish_result(content_types, target)
+    unpublished_target = _write(content_types, _SPECIES, {"title": "Secret"})
+    ref = {"related": {"$ref": str(target.content_id)}}
+    published_source = _write(content_types, _PROFILE, {**ref, "name": "Pub"})
+    _publish_result(content_types, published_source)
+    _write(content_types, _PROFILE, {**ref, "name": "Draft only"})
+    archived_source = _write(content_types, _PROFILE, {**ref, "name": "Archived"})
+    archived_version = _publish_result(content_types, archived_source)
+    unrelated = _write(content_types, _PROFILE, {"name": "No refs"})
+    _publish_result(content_types, unrelated)
+    _drain_events()
+    archive_content(
+        ArchiveContent(
+            content_id=archived_source.content_id,
+            expected_version=archived_version,
+            actor_id=_ACTOR,
+        ),
+        uow=DjangoContentUnitOfWork(clock=DjangoClock()),
+        clock=DjangoClock(),
+        ids=Uuid4Generator(),
+        policy=_AllowAll(),
+        actor=_ACTOR_CONTEXT,
+    )
+
+    # Archived sources are excluded at query time even before the event runs.
+    body = _referenced_by(target.content_id)
+
+    assert _item_ids(body) == [str(published_source.content_id)]
+    assert body["total_count"] == 1
+    assert body["limit"] == 20
+    assert body["offset"] == 0
+    listing = APIClient().get(reverse("api:delivery:content-list")).json()
+    by_id = {item["content_id"]: item for item in listing["results"]}
+    items = body["items"]
+    assert isinstance(items, list)
+    assert items[0] == by_id[str(published_source.content_id)]
+    assert items[0]["data"]["related"]["title"] == "Great white"
+    assert "Draft only" not in str(body)
+
+    anonymous = APIClient()
+    unpublished = anonymous.get(
+        reverse(
+            "api:delivery:content-referenced-by",
+            args=[unpublished_target.content_id],
+        )
+    )
+    missing = anonymous.get(
+        reverse("api:delivery:content-referenced-by", args=[uuid4()])
+    )
+    assert unpublished.status_code == 404
+    assert missing.status_code == 404
+
+
+def test_referenced_by_filters_by_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    content_types = _use_reference_types(monkeypatch)
+    target = _write(content_types, _SPECIES, {"title": "Hammerhead"})
+    _publish_result(content_types, target)
+    ref: dict[str, object] = {"related": {"$ref": str(target.content_id)}}
+    profile = _write(content_types, _PROFILE, ref)
+    _publish_result(content_types, profile)
+    guide = _write(content_types, _GUIDE, ref)
+    _publish_result(content_types, guide)
+    many = _write(
+        content_types,
+        _PROFILE,
+        {
+            "related": {"$ref": str(target.content_id)},
+            "items": [{"$ref": str(target.content_id)}],
+        },
+    )
+    _publish_result(content_types, many)
+    _drain_events()
+
+    profiles = _referenced_by(target.content_id, type=str(_PROFILE))
+    guides = _referenced_by(target.content_id, type=str(_GUIDE))
+    unknown = _referenced_by(target.content_id, type="tests.unknown")
+    first_page = _referenced_by(target.content_id, limit=2)
+    second_page = _referenced_by(target.content_id, limit=2, offset=2)
+
+    assert sorted(_item_ids(profiles)) == sorted(
+        [str(profile.content_id), str(many.content_id)]
+    )
+    assert profiles["total_count"] == 2
+    assert _item_ids(guides) == [str(guide.content_id)]
+    assert unknown == {"items": [], "total_count": 0, "limit": 20, "offset": 0}
+    assert first_page["total_count"] == 3
+    assert len(_item_ids(first_page)) == 2
+    assert len(_item_ids(second_page)) == 1
+    assert set(_item_ids(first_page) + _item_ids(second_page)) == {
+        str(profile.content_id),
+        str(guide.content_id),
+        str(many.content_id),
+    }
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"limit": "-1"},
+        {"limit": "abc"},
+        {"limit": "101"},
+        {"offset": "-1"},
+        {"type": "not a valid key"},
+    ],
+)
+def test_referenced_by_rejects_invalid_query(
+    monkeypatch: pytest.MonkeyPatch, params: dict[str, str]
+) -> None:
+    content_types = _use_reference_types(monkeypatch)
+    target = _write(content_types, _SPECIES, {"title": "Tiger"})
+    _publish_result(content_types, target)
+
+    response = APIClient().get(
+        reverse("api:delivery:content-referenced-by", args=[target.content_id]),
+        params,
+    )
+
+    assert response.status_code == 400

@@ -101,6 +101,10 @@ class FakeContentTypes:
         self._require(type_key)
         return type_key == MEDIA
 
+    def revision_links(self, revision: Revision) -> ContentLinks:
+        del revision
+        return ContentLinks()
+
     def blob_ids(self, revision: Revision) -> frozenset[UUID]:
         del revision
         return frozenset()

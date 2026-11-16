@@ -403,6 +403,9 @@ class _NotReadyContentTypes:
     def embeds_in_references(self, type_key: ContentTypeKey) -> bool:
         return self._inner.embeds_in_references(type_key)
 
+    def revision_links(self, revision: Revision) -> ContentLinks:
+        return self._inner.revision_links(revision)
+
     def blob_ids(self, revision: Revision) -> frozenset[UUID]:
         return self._inner.blob_ids(revision)
 

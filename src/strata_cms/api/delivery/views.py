@@ -1,5 +1,6 @@
 """Public Delivery API views exposing only explicitly published content."""
 
+from dataclasses import dataclass
 from uuid import UUID
 
 from drf_spectacular.types import OpenApiTypes
@@ -13,12 +14,14 @@ from rest_framework.views import APIView
 from strata_cms.api.delivery.serializers import (
     ContentListQuerySerializer,
     ContentSearchQuerySerializer,
+    ReferencedByQuerySerializer,
 )
 from strata_cms.api.errors import public_error_detail
 from strata_cms.application.content.delivery import (
     PublishedContent,
     get_published_content,
     list_published_content,
+    list_referencing_content,
 )
 from strata_cms.application.ports.search import SearchQuery
 from strata_cms.application.routing.resolution import get_published_content_by_path
@@ -27,6 +30,8 @@ from strata_cms.config.services import (
     get_content_delivery_queries,
     get_content_type_service,
     get_link_resolver,
+    get_published_link_queries,
+    get_published_reference_index,
     get_route_path_projection,
     get_search_backend,
 )
@@ -80,28 +85,13 @@ class ContentDeliveryListView(DeliveryAPIView):
     )
     def get(self, request: Request) -> Response:
         """Return one page of published content, newest-published first."""
-        query = ContentListQuerySerializer(data=request.query_params)
-        query.is_valid(raise_exception=True)
-        type_value = query.validated_data.get("type")
-        limit = query.validated_data["limit"]
-        offset = query.validated_data["offset"]
-        if not isinstance(limit, int) or not isinstance(offset, int):
-            raise AssertionError("Serializer returned unexpected pagination types.")
-
-        type_key: ContentTypeKey | None = None
-        if type_value:
-            try:
-                type_key = ContentTypeKey(str(type_value))
-            except InvalidContentTypeKeyError as exc:
-                return Response(
-                    {"detail": public_error_detail(exc)},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
+        query = _parse_page_query(ContentListQuerySerializer(data=request.query_params))
+        if isinstance(query, Response):
+            return query
         page = list_published_content(
-            type_key=type_key,
-            limit=limit,
-            offset=offset,
+            type_key=query.type_key,
+            limit=query.limit,
+            offset=query.offset,
             queries=get_content_delivery_queries(),
             content_types=get_content_type_service(),
             cache=get_cache(),
@@ -113,6 +103,55 @@ class ContentDeliveryListView(DeliveryAPIView):
                 "limit": page.limit,
                 "offset": page.offset,
                 "results": [_render(item) for item in page.items],
+            }
+        )
+
+
+class ContentReferencedByView(DeliveryAPIView):
+    """List published content referencing one published content item."""
+
+    @extend_schema(
+        operation_id="v1_content_referenced_by",
+        parameters=[
+            OpenApiParameter("type", OpenApiTypes.STR, required=False),
+            OpenApiParameter("limit", OpenApiTypes.INT, required=False),
+            OpenApiParameter("offset", OpenApiTypes.INT, required=False),
+        ],
+        responses=OpenApiTypes.OBJECT,
+    )
+    def get(self, request: Request, content_id: UUID) -> Response:
+        """Return one page of referencing sources, or 404 for an unpublished target.
+
+        Items have the content list item shape; sources that are not currently
+        published are excluded, and an unknown ``type`` yields an empty page.
+        """
+        query = _parse_page_query(
+            ReferencedByQuerySerializer(data=request.query_params)
+        )
+        if isinstance(query, Response):
+            return query
+        page = list_referencing_content(
+            ContentId(content_id),
+            source_type=query.type_key,
+            limit=query.limit,
+            offset=query.offset,
+            queries=get_content_delivery_queries(),
+            sources=get_published_link_queries(),
+            index=get_published_reference_index(),
+            content_types=get_content_type_service(),
+            links=get_link_resolver(),
+        )
+        if page is None:
+            return Response(
+                {"detail": "Content was not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(
+            {
+                "items": [_render(item) for item in page.items],
+                "total_count": page.total_count,
+                "limit": page.limit,
+                "offset": page.offset,
             }
         )
 
@@ -199,6 +238,35 @@ class ContentSearchView(DeliveryAPIView):
                 ],
             }
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _PageQuery:
+    type_key: ContentTypeKey | None
+    limit: int
+    offset: int
+
+
+def _parse_page_query(
+    serializer: ContentListQuerySerializer,
+) -> _PageQuery | Response:
+    """Validate type/limit/offset; a malformed type key is a 400 response."""
+    serializer.is_valid(raise_exception=True)
+    type_value = serializer.validated_data.get("type")
+    limit = serializer.validated_data["limit"]
+    offset = serializer.validated_data["offset"]
+    if not isinstance(limit, int) or not isinstance(offset, int):
+        raise AssertionError("Serializer returned unexpected pagination types.")
+    type_key: ContentTypeKey | None = None
+    if type_value:
+        try:
+            type_key = ContentTypeKey(str(type_value))
+        except InvalidContentTypeKeyError as exc:
+            return Response(
+                {"detail": public_error_detail(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    return _PageQuery(type_key=type_key, limit=limit, offset=offset)
 
 
 def _render(content: PublishedContent) -> dict[str, object]:

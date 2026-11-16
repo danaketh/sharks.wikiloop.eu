@@ -136,11 +136,11 @@ class DataDrivenContentTypes:
         del type_key
         return False
 
-    def blob_ids(self, revision: Revision) -> frozenset[UUID]:
-        return frozenset(link.target for link in self._links(revision).blobs)
-
-    def _links(self, revision: Revision) -> ContentLinks:
+    def revision_links(self, revision: Revision) -> ContentLinks:
         return self.extract_links(type_key=revision.content_type, data=revision.data)
+
+    def blob_ids(self, revision: Revision) -> frozenset[UUID]:
+        return frozenset(link.target for link in self.revision_links(revision).blobs)
 
 
 def _list(raw: Mapping[str, object], key: str) -> list[object]:

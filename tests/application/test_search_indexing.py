@@ -77,6 +77,10 @@ class FakeContentTypes:
         del type_key
         return False
 
+    def revision_links(self, revision: Revision) -> ContentLinks:
+        del revision
+        return ContentLinks()
+
     def blob_ids(self, revision: Revision) -> frozenset[UUID]:
         del revision
         return frozenset()

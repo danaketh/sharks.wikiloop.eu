@@ -5,6 +5,7 @@ from django.urls import path
 from strata_cms.api.delivery.views import (
     ContentDeliveryListView,
     ContentDeliveryView,
+    ContentReferencedByView,
     ContentSearchView,
     RouteResolutionView,
 )
@@ -20,6 +21,11 @@ urlpatterns = [
         "content/<uuid:content_id>/",
         ContentDeliveryView.as_view(),
         name="content-detail",
+    ),
+    path(
+        "content/<uuid:content_id>/referenced-by/",
+        ContentReferencedByView.as_view(),
+        name="content-referenced-by",
     ),
     path(
         "search/",

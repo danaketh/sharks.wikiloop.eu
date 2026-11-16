@@ -33,3 +33,7 @@ class ContentSearchQuerySerializer(serializers.Serializer[Any]):
         default=DEFAULT_LIST_LIMIT,
     )
     offset = serializers.IntegerField(required=False, min_value=0, default=0)
+
+
+class ReferencedByQuerySerializer(ContentListQuerySerializer):
+    """Same type filter and pagination rules as the content list."""

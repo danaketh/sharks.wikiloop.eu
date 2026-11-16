@@ -5,8 +5,15 @@ from datetime import datetime, timedelta
 
 from strata_cms.application.content.links import LinkResolver
 from strata_cms.application.ports.cache import Cache
-from strata_cms.application.ports.content_delivery import ContentDeliveryQueries
+from strata_cms.application.ports.content_delivery import (
+    ContentDeliveryQueries,
+    PublishedRevision,
+)
 from strata_cms.application.ports.content_types import ContentTypeService
+from strata_cms.application.ports.links import (
+    PublishedLinkQueries,
+    PublishedReferenceIndex,
+)
 from strata_cms.domain.value_objects import ContentId, ContentTypeKey, RevisionId
 
 DEFAULT_DELIVERY_CACHE_TTL = timedelta(seconds=60)
@@ -104,14 +111,7 @@ def list_published_content(  # noqa: PLR0913 - keyword-only injected ports, one 
     if links is not None:
         documents = links.resolve_many(documents)
     items = tuple(
-        PublishedContent(
-            content_id=item.content_id,
-            type_key=item.type_key,
-            revision_id=item.revision.id,
-            revision_number=item.revision.number,
-            published_at=item.published_at,
-            data=data,
-        )
+        _published_content(item, data)
         for item, data in zip(raw_items, documents, strict=True)
     )
     page = PublishedContentPage(
@@ -123,3 +123,56 @@ def list_published_content(  # noqa: PLR0913 - keyword-only injected ports, one 
     if cache is not None:
         cache.set(cache_key, page, ttl=cache_ttl)
     return page
+
+
+def list_referencing_content(  # noqa: PLR0913 - keyword-only injected ports, one per dependency
+    target_id: ContentId,
+    *,
+    source_type: ContentTypeKey | None,
+    limit: int,
+    offset: int,
+    queries: ContentDeliveryQueries,
+    sources: PublishedLinkQueries,
+    index: PublishedReferenceIndex,
+    content_types: ContentTypeService,
+    links: LinkResolver,
+) -> PublishedContentPage | None:
+    """Return one page of published content referencing a published target.
+
+    Returns ``None`` when the target itself is not published, so callers do not
+    reveal whether unpublished content exists. Sources are loaded and their
+    links resolved in one batch each (no per-item queries).
+    """
+    if queries.get_published(target_id) is None:
+        return None
+    source_ids, total_count = index.referencing(
+        target_id, source_type=source_type, limit=limit, offset=offset
+    )
+    rows = sources.published_revisions(frozenset(source_ids))
+    # A source unpublished between the two reads is simply omitted.
+    ordered = tuple(rows[source_id] for source_id in source_ids if source_id in rows)
+    documents = links.resolve_many(
+        tuple(content_types.delivery_data(row.revision) for row in ordered)
+    )
+    return PublishedContentPage(
+        items=tuple(
+            _published_content(row, data)
+            for row, data in zip(ordered, documents, strict=True)
+        ),
+        total_count=total_count,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _published_content(
+    row: PublishedRevision, data: dict[str, object]
+) -> PublishedContent:
+    return PublishedContent(
+        content_id=row.content_id,
+        type_key=row.type_key,
+        revision_id=row.revision.id,
+        revision_number=row.revision.number,
+        published_at=row.published_at,
+        data=data,
+    )

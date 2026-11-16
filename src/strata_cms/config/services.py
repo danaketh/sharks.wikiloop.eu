@@ -5,6 +5,9 @@ from functools import lru_cache
 from django.conf import settings
 
 from strata_cms.application.content.links import LinkResolver
+from strata_cms.application.content.reference_indexing import (
+    reindex_references_from_event,
+)
 from strata_cms.application.content.search_indexing import reindex_from_event
 from strata_cms.application.ports.authorization import ContentAuthorizationPolicy
 from strata_cms.application.ports.cache import Cache
@@ -15,7 +18,11 @@ from strata_cms.application.ports.content_types import ContentTypeService
 from strata_cms.application.ports.content_uow import ContentUnitOfWork
 from strata_cms.application.ports.editors import EditorCatalog
 from strata_cms.application.ports.ids import IdGenerator
-from strata_cms.application.ports.links import LinkTargetQueries
+from strata_cms.application.ports.links import (
+    LinkTargetQueries,
+    PublishedLinkQueries,
+    PublishedReferenceIndex,
+)
 from strata_cms.application.ports.media import (
     ImageProcessor,
     MediaBlobRepository,
@@ -42,6 +49,9 @@ from strata_cms.infrastructure.persistence.django.media import (
 from strata_cms.infrastructure.persistence.django.outbox import DjangoOutboxQueue
 from strata_cms.infrastructure.persistence.django.projections import (
     DjangoLinkTargetQueries,
+)
+from strata_cms.infrastructure.persistence.django.published_references import (
+    DjangoPublishedReferenceIndex,
 )
 from strata_cms.infrastructure.persistence.django.queries import (
     DjangoContentDeliveryQueries,
@@ -89,6 +99,16 @@ def get_content_queries() -> ContentEditorQueries:
 def get_content_delivery_queries() -> ContentDeliveryQueries:
     """Return the optimized published-content query adapter."""
     return DjangoContentDeliveryQueries()
+
+
+def get_published_link_queries() -> PublishedLinkQueries:
+    """Return the batched published-revision lookup used by Delivery."""
+    return DjangoContentDeliveryQueries()
+
+
+def get_published_reference_index() -> PublishedReferenceIndex:
+    """Return the published-scope reverse reference index."""
+    return DjangoPublishedReferenceIndex()
 
 
 def get_clock() -> Clock:
@@ -157,7 +177,7 @@ def get_media_blob_repository() -> MediaBlobRepository:
 def get_link_resolver() -> LinkResolver:
     """Return the Delivery link resolver over published state only."""
     return LinkResolver(
-        queries=DjangoContentDeliveryQueries(),
+        queries=get_published_link_queries(),
         content_types=get_content_type_service(),
         blobs=get_media_blob_repository(),
         files=get_media_file_store(),
@@ -171,7 +191,10 @@ def get_media_max_upload_bytes() -> int:
 
 
 def dispatch_content_event(message: MessageEnvelope) -> None:
-    """`strata_worker --dispatcher` entry point: keep the search index in sync.
+    """`strata_worker --dispatcher` entry point: sync search and references.
+
+    Both handlers reconcile with current published state, so redelivery after
+    a partial failure is safe.
 
     Opt-in: pass `--dispatcher strata_cms.config.services.dispatch_content_event`
     to `python manage.py strata_worker` to enable it.
@@ -181,4 +204,10 @@ def dispatch_content_event(message: MessageEnvelope) -> None:
         queries=get_content_delivery_queries(),
         content_types=get_content_type_service(),
         search=get_search_backend(),
+    )
+    reindex_references_from_event(
+        message,
+        queries=get_content_delivery_queries(),
+        content_types=get_content_type_service(),
+        index=get_published_reference_index(),
     )

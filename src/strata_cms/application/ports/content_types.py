@@ -86,6 +86,10 @@ class ContentTypeService(Protocol):
         """Return whether reference summaries embed this type's delivery data."""
         ...  # pragma: no cover - protocol declaration
 
+    def revision_links(self, revision: Revision) -> ContentLinks:
+        """Return declared links of one (possibly historical) revision."""
+        ...  # pragma: no cover - protocol declaration
+
     def blob_ids(self, revision: Revision) -> frozenset[UUID]:
         """Return every blob id linked from one (possibly historical) revision."""
         ...  # pragma: no cover - protocol declaration
