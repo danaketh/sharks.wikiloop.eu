@@ -139,10 +139,15 @@ class PillowImageProcessor:
         # Header-only dimensions are checked before any pixel data is decoded.
         if width < 1 or height < 1:
             raise UnsupportedMediaError("media_unreadable")
-        if width * height > self._max_pixels:
+        # The limit is a budget across all frames: Pillow composites animation
+        # frames to the full canvas, so decode cost is frames x canvas pixels
+        # regardless of how small the compressed input is.
+        if _frame_count(image) * width * height > self._max_pixels:
             raise UnsupportedMediaError("media_too_many_pixels")
-        frames = [_loaded_copy(frame) for frame in _frames(image)]
         if preserve_original:
+            # Validate every frame without retaining decoded frames.
+            for frame in _frames(image):
+                frame.load()
             return ProcessedImage(
                 data=data,
                 content_type=image_type.content_type,
@@ -150,6 +155,7 @@ class PillowImageProcessor:
                 width=width,
                 height=height,
             )
+        frames = [_loaded_copy(frame) for frame in _frames(image)]
         encoded, out_width, out_height = _encode(image, frames, image_type, data)
         return ProcessedImage(
             data=encoded,
@@ -158,6 +164,17 @@ class PillowImageProcessor:
             width=out_width,
             height=out_height,
         )
+
+
+def _frame_count(image: Image.Image) -> int:
+    """Return the number of frames `_frames` will decode, from headers only.
+
+    GIF counts by seeking frame headers without decoding image data; WebP and
+    APNG read the count from container metadata.
+    """
+    if image.format == "MPO":
+        return 1
+    return max(int(getattr(image, "n_frames", 1)), 1)
 
 
 def _frames(image: Image.Image) -> Iterator[Image.Image]:

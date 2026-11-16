@@ -385,3 +385,52 @@ def test_multi_picture_jpeg_stored_as_single_jpeg() -> None:
     assert processed.content_type == "image/jpeg"
     assert output.format == "JPEG"
     assert getattr(output, "n_frames", 1) == 1
+
+
+def _animation(image_format: str, frame_count: int) -> bytes:
+    frames = [
+        Image.new("RGB", (10, 10), (i * 40 % 256, 0, 0)) for i in range(frame_count)
+    ]
+    params: dict[str, object] = {}
+    if image_format == "WEBP":
+        params["lossless"] = True
+    return _encode(
+        frames[0],
+        image_format,
+        save_all=True,
+        append_images=frames[1:],
+        duration=[10] * frame_count,
+        **params,
+    )
+
+
+@pytest.mark.parametrize("image_format", ["GIF", "WEBP", "PNG"])
+@pytest.mark.parametrize("preserve_original", [False, True])
+def test_animation_over_total_pixel_budget_rejected(
+    image_format: str, preserve_original: bool
+) -> None:
+    # One 10x10 frame (100 px) fits; 5 frames (500 px) exceed the 400 budget.
+    processor = PillowImageProcessor(max_pixels=400)
+
+    with pytest.raises(UnsupportedMediaError) as error:
+        processor.process(
+            _animation(image_format, 5), preserve_original=preserve_original
+        )
+
+    assert error.value.reason == "media_too_many_pixels"
+
+
+@pytest.mark.parametrize("image_format", ["GIF", "WEBP", "PNG"])
+@pytest.mark.parametrize("preserve_original", [False, True])
+def test_animation_within_total_pixel_budget_accepted(
+    image_format: str, preserve_original: bool
+) -> None:
+    processor = PillowImageProcessor(max_pixels=400)
+    source = _animation(image_format, 4)
+
+    processed = processor.process(source, preserve_original=preserve_original)
+
+    output = Image.open(BytesIO(processed.data))
+    assert getattr(output, "n_frames", 1) == 4
+    if preserve_original:
+        assert processed.data == source
