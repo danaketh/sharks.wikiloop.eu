@@ -5,7 +5,7 @@ from uuid import UUID
 
 from django.core.files.uploadedfile import UploadedFile
 from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import OpenApiResponse, extend_schema
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.request import Request
@@ -20,10 +20,14 @@ from strata_cms.api.management.serializers import (
     CreateContentSerializer,
     CreateRevisionSerializer,
     ErrorDetailSerializer,
+    MarkdownPreviewResultSerializer,
+    MarkdownPreviewSerializer,
     MediaBlobSerializer,
     MediaBlobUploadSerializer,
     MediaProblemSerializer,
     MoveRouteSerializer,
+    PickerQuerySerializer,
+    PickerResultSerializer,
     PublishRevisionSerializer,
 )
 from strata_cms.application.content.commands import (
@@ -33,6 +37,7 @@ from strata_cms.application.content.commands import (
     PublishContent,
     RestoreContent,
 )
+from strata_cms.application.content.picker import search_picker_titles
 from strata_cms.application.content.results import (
     ContentLifecycleResult,
     ContentWriteResult,
@@ -93,6 +98,10 @@ from strata_cms.domain.media import MediaBlob
 from strata_cms.domain.revision import Revision
 from strata_cms.domain.value_objects import ContentId, ContentTypeKey, RevisionId
 from strata_cms.infrastructure.authorization.actor import build_content_actor
+from strata_cms.plugin_api.markdown import (
+    DEFAULT_MARKDOWN_PROFILE,
+    render_markdown_preview,
+)
 
 
 class ManagementAPIView(APIView):
@@ -147,7 +156,89 @@ class ContentTypeDetailView(ManagementAPIView):
 
 
 class ContentCollectionView(ManagementAPIView):
-    """Create a new content identity and initial immutable revision."""
+    """Search content titles for pickers or create a new content identity."""
+
+    @extend_schema(
+        operation_id="v1_manage_content_picker_search",
+        parameters=[
+            OpenApiParameter(
+                "type",
+                OpenApiTypes.STR,
+                required=True,
+                many=True,
+                description="Content type key(s) to search; repeat for several.",
+            ),
+            OpenApiParameter(
+                "q",
+                OpenApiTypes.STR,
+                required=False,
+                description="Case-insensitive title substring (max 200 chars).",
+            ),
+            OpenApiParameter("limit", OpenApiTypes.INT, required=False),
+            OpenApiParameter("offset", OpenApiTypes.INT, required=False),
+        ],
+        responses={
+            200: PickerResultSerializer,
+            403: OpenApiResponse(
+                response=ErrorDetailSerializer, description="View permission missing."
+            ),
+        },
+    )
+    def get(self, request: Request) -> Response:
+        """Find non-archived content by draft title to pick a reference target."""
+        denied = _authorize(request, ContentAction.VIEW)
+        if denied is not None:
+            return denied
+        query = PickerQuerySerializer(data=request.query_params)
+        query.is_valid(raise_exception=True)
+        params = query.validated_data
+        raw_types = params["type"]
+        text = params["q"]
+        limit = params["limit"]
+        offset = params["offset"]
+        if (
+            not isinstance(raw_types, list)
+            or not isinstance(text, str)
+            or not isinstance(limit, int)
+            or not isinstance(offset, int)
+        ):
+            raise AssertionError("Serializer returned unexpected picker types.")
+        catalog = get_editor_catalog()
+        type_keys: set[ContentTypeKey] = set()
+        try:
+            for raw in raw_types:
+                key = ContentTypeKey(str(raw))
+                if catalog.get_content_type(key) is None:
+                    return Response(
+                        {"detail": f"Content type '{key}' is not available."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                type_keys.add(key)
+        except InvalidContentTypeKeyError as exc:
+            return _application_error(exc)
+        rows, total = search_picker_titles(
+            get_content_queries(),
+            type_keys=frozenset(type_keys),
+            query=text,
+            limit=limit,
+            offset=offset,
+        )
+        return Response(
+            {
+                "items": [
+                    {
+                        "id": str(row.content_id),
+                        "type": str(row.type_key),
+                        "title": row.title,
+                        "is_published": row.is_published,
+                    }
+                    for row in rows
+                ],
+                "total_count": total,
+                "limit": limit,
+                "offset": offset,
+            }
+        )
 
     @extend_schema(
         request=CreateContentSerializer,
@@ -189,6 +280,47 @@ class ContentCollectionView(ManagementAPIView):
         ) as exc:
             return _application_error(exc)
         return Response(_write_result(result), status=status.HTTP_201_CREATED)
+
+
+class MarkdownPreviewView(ManagementAPIView):
+    """Render Markdown to sanitized HTML for editor previews."""
+
+    @extend_schema(
+        operation_id="v1_manage_markdown_preview",
+        request=MarkdownPreviewSerializer,
+        responses={
+            200: MarkdownPreviewResultSerializer,
+            400: OpenApiResponse(
+                response=MediaProblemSerializer,
+                description=(
+                    "`source` is not a string, or `code` is `markdown_too_long`."
+                ),
+            ),
+            403: OpenApiResponse(
+                response=ErrorDetailSerializer, description="View permission missing."
+            ),
+        },
+    )
+    def post(self, request: Request) -> Response:
+        """Return preview HTML; raw HTML in the source is escaped, never passed."""
+        denied = _authorize(request, ContentAction.VIEW)
+        if denied is not None:
+            return denied
+        serializer = MarkdownPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        source = serializer.validated_data["source"]
+        if not isinstance(source, str):
+            raise AssertionError("Serializer returned a non-string source.")
+        max_length = DEFAULT_MARKDOWN_PROFILE.max_length
+        if len(source) > max_length:
+            return Response(
+                {
+                    "detail": f"Markdown must not exceed {max_length} characters.",
+                    "code": "markdown_too_long",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({"html": render_markdown_preview(source)})
 
 
 class ContentDocumentView(ManagementAPIView):

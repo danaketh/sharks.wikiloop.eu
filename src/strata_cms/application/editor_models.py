@@ -23,6 +23,7 @@ class ScalarEditorFieldSpec:
     placeholder: str
     read_only: bool
     choices: tuple[EditorChoiceSpec, ...] = ()
+    reference_types: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -21,8 +21,10 @@ from strata_cms.plugin_api.blocks import (
 from strata_cms.plugin_api.editor import (
     BlockCollectionEditorField,
     BlockEditorDefinition,
+    EditorInputKind,
     ScalarEditorField,
 )
+from strata_cms.plugin_api.links import ReferenceFieldDefinition
 from strata_cms.plugin_api.registry import RegisteredBlockTypeEntry, StrataRegistry
 
 
@@ -62,11 +64,16 @@ class RegistryEditorCatalog:
         definition = entry.definition
         editor = definition.editor
         block_fields = {field.path: field for field in definition.block_fields}
+        reference_fields = definition.reference_fields
         fields = (
             ()
             if editor is None
             else tuple(
-                self._field_spec(item, block_fields=block_fields)
+                self._field_spec(
+                    item,
+                    block_fields=block_fields,
+                    reference_fields=reference_fields,
+                )
                 for item in editor.fields
             )
         )
@@ -92,9 +99,10 @@ class RegistryEditorCatalog:
         field: ScalarEditorField | BlockCollectionEditorField,
         *,
         block_fields: dict[tuple[str, ...], BlockFieldDefinition],
+        reference_fields: tuple[ReferenceFieldDefinition, ...],
     ) -> ScalarEditorFieldSpec | BlockCollectionEditorFieldSpec:
         if isinstance(field, ScalarEditorField):
-            return _scalar_spec(field)
+            return _scalar_spec(field, reference_fields)
         semantic = block_fields[field.path]
         return BlockCollectionEditorFieldSpec(
             path=field.path,
@@ -164,7 +172,10 @@ class RegistryEditorCatalog:
             schema_version=definition.schema_version,
             editable=editor is not None,
             fields=(
-                tuple(_scalar_spec(field) for field in editor.fields)
+                tuple(
+                    _scalar_spec(field, definition.reference_fields)
+                    for field in editor.fields
+                )
                 if editor is not None
                 else ()
             ),
@@ -173,7 +184,10 @@ class RegistryEditorCatalog:
         )
 
 
-def _scalar_spec(field: ScalarEditorField) -> ScalarEditorFieldSpec:
+def _scalar_spec(
+    field: ScalarEditorField,
+    reference_fields: tuple[ReferenceFieldDefinition, ...],
+) -> ScalarEditorFieldSpec:
     return ScalarEditorFieldSpec(
         path=field.path,
         label=field.label,
@@ -186,7 +200,21 @@ def _scalar_spec(field: ScalarEditorField) -> ScalarEditorFieldSpec:
             EditorChoiceSpec(value=choice.value, label=choice.label)
             for choice in field.choices
         ),
+        reference_types=_reference_types(field, reference_fields),
     )
+
+
+def _reference_types(
+    field: ScalarEditorField,
+    reference_fields: tuple[ReferenceFieldDefinition, ...],
+) -> tuple[str, ...]:
+    """Prefer the semantic reference definition so editor hints cannot drift."""
+    if field.input_kind is not EditorInputKind.REFERENCE:
+        return ()
+    for reference in reference_fields:
+        if reference.path.segments == field.path:
+            return tuple(sorted(str(key) for key in reference.allowed_types))
+    return tuple(sorted(str(key) for key in field.reference_types))
 
 
 def _constraint_spec(constraint: BlockListConstraint) -> BlockConstraintSpec:

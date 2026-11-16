@@ -2,6 +2,7 @@ from dataclasses import replace
 
 import pytest
 
+from strata_cms.application.editor_models import ScalarEditorFieldSpec
 from strata_cms.domain.revision import RevisionData
 from strata_cms.domain.value_objects import ContentTypeKey
 from strata_cms.examples.simple_article import (
@@ -15,10 +16,16 @@ from strata_cms.plugin_api import (
     BlockCollectionEditorField,
     BlockEditorDefinition,
     ContentEditorDefinition,
+    ContentTypeDefinition,
     EditorChoice,
     EditorInputKind,
+    LinkPath,
+    PluginDefinition,
+    PluginKey,
+    ReferenceFieldDefinition,
     ScalarEditorField,
     StrataRegistryBuilder,
+    ValidationIssue,
 )
 from strata_cms.plugin_api.errors import RegistryConfigurationError
 
@@ -137,3 +144,95 @@ def test_editor_rejects_ancestor_descendant_field_overlap() -> None:
                 ),
             ),
         )
+
+
+class _DictSchema:
+    value_type: type[dict[str, object]] = dict
+
+    def deserialize(self, data: RevisionData) -> dict[str, object]:
+        return data.as_dict()
+
+    def serialize(self, value: dict[str, object]) -> RevisionData:
+        return RevisionData.from_mapping(value)
+
+    def validate(self, value: dict[str, object]) -> tuple[ValidationIssue, ...]:
+        del value
+        return ()
+
+
+def _reference_catalog(
+    *, editor_types: tuple[ContentTypeKey, ...]
+) -> RegistryEditorCatalog:
+    species = ContentTypeKey("tests.species")
+    profile = ContentTypeKey("tests.profile")
+    builder = StrataRegistryBuilder()
+    plugin = PluginDefinition(
+        key=PluginKey("tests.editor_refs"),
+        version="1.0.0",
+        requires_strata=">=0.1,<0.2",
+    )
+    builder.register_plugin(plugin)
+    registrar = builder.registrar_for(plugin.key)
+    registrar.register_content_type(
+        ContentTypeDefinition(
+            key=species,
+            schema_version=1,
+            schema=_DictSchema(),
+            summary_title=lambda value: str(value.get("title", "")),
+        )
+    )
+    registrar.register_content_type(
+        ContentTypeDefinition(
+            key=profile,
+            schema_version=1,
+            schema=_DictSchema(),
+            reference_fields=(
+                ReferenceFieldDefinition(
+                    LinkPath.parse("species"), frozenset({species})
+                ),
+            ),
+            editor=ContentEditorDefinition(
+                label="Profile",
+                fields=(
+                    ScalarEditorField(
+                        path=("species",),
+                        label="Species",
+                        input_kind=EditorInputKind.REFERENCE,
+                        reference_types=editor_types,
+                    ),
+                    ScalarEditorField(
+                        path=("bio",), label="Bio", input_kind=EditorInputKind.MARKDOWN
+                    ),
+                ),
+            ),
+        )
+    )
+    return RegistryEditorCatalog(builder.build(strata_version="0.1.0"))
+
+
+def test_editor_contract_exposes_reference_types() -> None:
+    editor = _reference_catalog(
+        editor_types=(ContentTypeKey("tests.species"),)
+    ).get_content_type(ContentTypeKey("tests.profile"))
+
+    assert editor is not None
+    by_path = {field.path: field for field in editor.fields}
+    species = by_path[("species",)]
+    assert isinstance(species, ScalarEditorFieldSpec)
+    assert species.input_kind == "reference"
+    assert species.reference_types == ("tests.species",)
+    bio = by_path[("bio",)]
+    assert isinstance(bio, ScalarEditorFieldSpec)
+    assert bio.input_kind == "markdown"
+    assert bio.reference_types == ()
+
+
+def test_editor_reference_types_follow_the_reference_field_definition() -> None:
+    editor = _reference_catalog(
+        editor_types=(ContentTypeKey("tests.other"),)
+    ).get_content_type(ContentTypeKey("tests.profile"))
+
+    assert editor is not None
+    species = next(f for f in editor.fields if f.path == ("species",))
+    assert isinstance(species, ScalarEditorFieldSpec)
+    assert species.reference_types == ("tests.species",)

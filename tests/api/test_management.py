@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -18,7 +19,10 @@ from strata_cms.config.services import get_content_type_service
 from strata_cms.domain.revision import Revision, RevisionData
 from strata_cms.domain.value_objects import ContentTypeKey
 from strata_cms.examples.simple_article import EXAMPLE_CONTENT_TYPE
-from strata_cms.infrastructure.persistence.django.models import ContentRecord
+from strata_cms.infrastructure.persistence.django.models import (
+    ContentRecord,
+    ContentTitleRecord,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -470,3 +474,184 @@ def test_document_includes_publish_readiness_for_latest_revision(
 
     assert not_ready["publish_readiness"]["ready"] is False
     assert not_ready["publish_readiness"]["problems"][0]["code"] == "fake_not_ready"
+
+
+# --- picker search and Markdown preview -------------------------------------
+
+
+def _create_titled(client: APIClient, title: str) -> dict[str, object]:
+    create = client.post(
+        reverse("api:management:content-create"),
+        {
+            "type": str(EXAMPLE_CONTENT_TYPE),
+            "schema_version": 2,
+            "data": {"title": title, "body": "Body"},
+        },
+        format="json",
+    )
+    assert create.status_code == 201
+    created: dict[str, object] = create.json()
+    # The example article declares no summary-title hook, so give the draft-title
+    # projection a title the way a title-bearing content type would.
+    ContentTitleRecord.objects.filter(pk=str(created["content_id"])).update(title=title)
+    return created
+
+
+def _picker(client: APIClient, **params: str) -> Any:
+    return client.get(reverse("api:management:content-create"), params)
+
+
+def _article_picker(client: APIClient, **params: str) -> Any:
+    return _picker(client, type=str(EXAMPLE_CONTENT_TYPE), **params)
+
+
+def test_picker_finds_draft_by_title() -> None:
+    client = _staff_client()
+    created = _create_titled(client, "Whale Shark Facts")
+    _create_titled(client, "Unrelated")
+
+    response = _article_picker(client, q="whale")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"] == [
+        {
+            "id": created["content_id"],
+            "type": str(EXAMPLE_CONTENT_TYPE),
+            "title": "Whale Shark Facts",
+            "is_published": False,
+        }
+    ]
+    assert (body["total_count"], body["limit"], body["offset"]) == (1, 20, 0)
+
+
+def test_picker_reports_published_state() -> None:
+    client = _staff_client()
+    created = _create_titled(client, "Published One")
+    publish = client.post(
+        reverse("api:management:content-publish", args=[created["content_id"]]),
+        {
+            "expected_version": created["content_version"],
+            "revision_id": created["revision_id"],
+        },
+        format="json",
+    )
+    assert publish.status_code == 200
+
+    body = _article_picker(client).json()
+
+    assert [item["is_published"] for item in body["items"]] == [True]
+
+
+def test_picker_excludes_archived() -> None:
+    client = _staff_client()
+    created = _create_titled(client, "Archived Whale")
+    archive = client.post(
+        reverse("api:management:content-archive", args=[created["content_id"]]),
+        {"expected_version": created["content_version"]},
+        format="json",
+    )
+    assert archive.status_code == 200
+
+    body = _article_picker(client, q="whale").json()
+
+    assert body["items"] == []
+    assert body["total_count"] == 0
+
+
+def test_picker_requires_type() -> None:
+    assert _picker(_staff_client(), q="x").status_code == 400
+
+
+def test_picker_rejects_unknown_or_malformed_type() -> None:
+    client = _staff_client()
+
+    assert _picker(client, type="tests.nope").status_code == 400
+    assert _picker(client, type="Not A Key!").status_code == 400
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"limit": "0"},
+        {"limit": "51"},
+        {"limit": "abc"},
+        {"offset": "-1"},
+        {"offset": "x"},
+    ],
+)
+def test_picker_rejects_bad_pagination(params: dict[str, str]) -> None:
+    assert _article_picker(_staff_client(), **params).status_code == 400
+
+
+def test_picker_paginates_in_title_then_id_order() -> None:
+    client = _staff_client()
+    for title in ("Charlie", "Alpha", "Bravo"):
+        _create_titled(client, title)
+
+    page = _article_picker(client, limit="2", offset="1").json()
+
+    assert [item["title"] for item in page["items"]] == ["Bravo", "Charlie"]
+    assert (page["total_count"], page["limit"], page["offset"]) == (3, 2, 1)
+
+
+def test_picker_treats_percent_and_underscore_literally() -> None:
+    client = _staff_client()
+    for title in ("100% sharks", "plain title", "a_b", "axb"):
+        _create_titled(client, title)
+
+    percent = _article_picker(client, q="%").json()
+    underscore = _article_picker(client, q="a_b").json()
+
+    assert [item["title"] for item in percent["items"]] == ["100% sharks"]
+    assert [item["title"] for item in underscore["items"]] == ["a_b"]
+
+
+def test_picker_requires_view_permission() -> None:
+    assert _article_picker(_staff_client_with_perms()).status_code == 403
+
+
+def test_picker_requires_authentication() -> None:
+    response = _article_picker(APIClient())
+
+    assert response.status_code in {401, 403}
+
+
+def test_preview_escapes_html() -> None:
+    response = _staff_client().post(
+        reverse("api:management:markdown-preview"),
+        {"source": "# Hi\n\n<script>x</script>"},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    html = response.json()["html"]
+    assert "<script" not in html
+    assert "<h1>Hi</h1>" in html
+
+
+def test_preview_rejects_oversized_source() -> None:
+    response = _staff_client().post(
+        reverse("api:management:markdown-preview"),
+        {"source": "x" * 200_001},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "markdown_too_long"
+
+
+def test_preview_requires_string_source() -> None:
+    response = _staff_client().post(
+        reverse("api:management:markdown-preview"), {"source": 5}, format="json"
+    )
+
+    assert response.status_code == 400
+
+
+def test_preview_requires_view_permission() -> None:
+    response = _staff_client_with_perms().post(
+        reverse("api:management:markdown-preview"), {"source": "x"}, format="json"
+    )
+
+    assert response.status_code == 403

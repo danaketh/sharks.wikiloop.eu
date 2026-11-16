@@ -13,6 +13,7 @@ from strata_cms.api.management.views import (
     ContentRouteView,
     ContentTypeDetailView,
     ContentTypeListView,
+    MarkdownPreviewView,
     MediaBlobUploadView,
 )
 
@@ -59,6 +60,11 @@ urlpatterns = [
         "content/<uuid:content_id>/route/",
         ContentRouteView.as_view(),
         name="content-route",
+    ),
+    path(
+        "markdown/preview/",
+        MarkdownPreviewView.as_view(),
+        name="markdown-preview",
     ),
     path(
         "media/blobs/",

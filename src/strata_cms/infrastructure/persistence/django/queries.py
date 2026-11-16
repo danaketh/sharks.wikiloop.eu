@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 
+from strata_cms.application.content.picker import ContentTitleRow
 from strata_cms.application.content.queries import EditableContent, RevisionSummary
 from strata_cms.application.ports.content_delivery import PublishedRevision
 from strata_cms.domain.revision import RevisionData
@@ -14,6 +15,7 @@ from strata_cms.domain.value_objects import (
 from strata_cms.infrastructure.persistence.django.mappers import revision_from_record
 from strata_cms.infrastructure.persistence.django.models import (
     ContentRecord,
+    ContentTitleRecord,
     RevisionRecord,
 )
 
@@ -115,6 +117,43 @@ class DjangoContentEditorQueries:
             created_at=revision.created_at,
             created_by=ActorId(revision.created_by),
         )
+
+    def search_titles(
+        self,
+        *,
+        type_keys: frozenset[ContentTypeKey],
+        query: str,
+        limit: int,
+        offset: int,
+    ) -> tuple[tuple[ContentTitleRow, ...], int]:
+        """Page the draft-title projection; one query for rows, one for state."""
+        queryset = ContentTitleRecord.objects.using(self._using).filter(
+            type_key__in=[str(key) for key in type_keys], archived=False
+        )
+        if query:
+            queryset = queryset.filter(title__icontains=query)
+        total = queryset.count()
+        records = list(
+            queryset.order_by("title", "content_id")[offset : offset + limit]
+        )
+        published = set(
+            ContentRecord.objects.using(self._using)
+            .filter(
+                pk__in=[record.content_id for record in records],
+                published_revision__isnull=False,
+            )
+            .values_list("pk", flat=True)
+        )
+        rows = tuple(
+            ContentTitleRow(
+                content_id=ContentId(record.content_id),
+                type_key=ContentTypeKey(record.type_key),
+                title=record.title or "",
+                is_published=record.content_id in published,
+            )
+            for record in records
+        )
+        return rows, total
 
 
 class DjangoContentDeliveryQueries:

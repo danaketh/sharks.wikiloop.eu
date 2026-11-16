@@ -4,7 +4,11 @@ from typing import Any
 
 from rest_framework import serializers
 
+from strata_cms.application.content.picker import PICKER_QUERY_MAX_LENGTH
 from strata_cms.application.errors import MEDIA_REJECTION_REASONS
+
+PICKER_MAX_LIMIT = 50
+PICKER_DEFAULT_LIMIT = 20
 
 
 class CreateContentSerializer(serializers.Serializer[Any]):
@@ -15,6 +19,72 @@ class CreateContentSerializer(serializers.Serializer[Any]):
     # Field name shadows BaseSerializer.data in the stubs; read through
     # validated_data (never the .data property), so this is safe at runtime.
     data = serializers.DictField()  # type: ignore[assignment]
+
+
+class PickerQuerySerializer(serializers.Serializer[Any]):
+    """Validate reference-picker search parameters."""
+
+    type = serializers.ListField(
+        child=serializers.CharField(max_length=200), allow_empty=False
+    )
+    q = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=1000
+    )
+    limit = serializers.IntegerField(
+        required=False,
+        min_value=1,
+        max_value=PICKER_MAX_LIMIT,
+        default=PICKER_DEFAULT_LIMIT,
+    )
+    offset = serializers.IntegerField(required=False, min_value=0, default=0)
+
+    def validate_q(self, value: str) -> str:
+        """Strip and cap the search text; the application layer repeats this."""
+        return value.strip()[:PICKER_QUERY_MAX_LENGTH]
+
+
+class StrictStringField(serializers.CharField):
+    """Accept only JSON strings; the stock CharField would coerce numbers."""
+
+    def to_internal_value(self, data: Any) -> str:
+        """Reject non-string input instead of coercing it."""
+        if not isinstance(data, str):
+            self.fail("invalid")
+        return super().to_internal_value(data)
+
+
+class MarkdownPreviewSerializer(serializers.Serializer[Any]):
+    """Validate the Markdown source to preview; length is checked in the view."""
+
+    # Shadows Field.source in the stubs only; declared fields are collected by the
+    # serializer metaclass, so the public JSON key ``source`` works at runtime.
+    source = StrictStringField(  # type: ignore[assignment]
+        allow_blank=True, trim_whitespace=False
+    )
+
+
+class MarkdownPreviewResultSerializer(serializers.Serializer[Any]):
+    """Describe the sanitized preview HTML (documentation of the 200 response)."""
+
+    html = serializers.CharField()
+
+
+class PickerItemSerializer(serializers.Serializer[Any]):
+    """Describe one picker result row."""
+
+    id = serializers.UUIDField()
+    type = serializers.CharField()
+    title = serializers.CharField(allow_blank=True)
+    is_published = serializers.BooleanField()
+
+
+class PickerResultSerializer(serializers.Serializer[Any]):
+    """Describe a page of picker results (documentation of the 200 response)."""
+
+    items = PickerItemSerializer(many=True)
+    total_count = serializers.IntegerField(min_value=0)
+    limit = serializers.IntegerField(min_value=1)
+    offset = serializers.IntegerField(min_value=0)
 
 
 class CreateRevisionSerializer(serializers.Serializer[Any]):

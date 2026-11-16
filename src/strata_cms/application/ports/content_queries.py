@@ -2,8 +2,9 @@
 
 from typing import Protocol
 
+from strata_cms.application.content.picker import ContentTitleRow
 from strata_cms.application.content.queries import EditableContent, RevisionSummary
-from strata_cms.domain.value_objects import ContentId, RevisionId
+from strata_cms.domain.value_objects import ContentId, ContentTypeKey, RevisionId
 
 
 class ContentEditorQueries(Protocol):
@@ -23,4 +24,19 @@ class ContentEditorQueries(Protocol):
         revision_id: RevisionId,
     ) -> EditableContent | None:
         """Return one specific historical revision owned by this content item."""
+        ...  # pragma: no cover - protocol declaration
+
+    def search_titles(
+        self,
+        *,
+        type_keys: frozenset[ContentTypeKey],
+        query: str,
+        limit: int,
+        offset: int,
+    ) -> tuple[tuple[ContentTitleRow, ...], int]:
+        """Search latest-draft titles (case-insensitive substring), excluding archived.
+
+        Rows are ordered by title then id; the second element is the total match
+        count before pagination. An empty ``query`` matches every title.
+        """
         ...  # pragma: no cover - protocol declaration
