@@ -5,10 +5,18 @@ from uuid import UUID
 import pytest
 from pytest_django import DjangoAssertNumQueries
 
-from strata_cms.application.content.commands import CreateContent, PublishContent
+from strata_cms.application.content.commands import (
+    ArchiveContent,
+    CreateContent,
+    PublishContent,
+)
 from strata_cms.application.content.delivery import get_published_content
 from strata_cms.application.content.links import LinkResolver
-from strata_cms.application.content.use_cases import create_content, publish_content
+from strata_cms.application.content.use_cases import (
+    archive_content,
+    create_content,
+    publish_content,
+)
 from strata_cms.application.errors import (
     ContentDataProblem,
     ContentTypeUnavailableError,
@@ -262,9 +270,7 @@ def test_unpublished_target_resolves_to_null() -> None:
     assert resolved == {"related": None}
 
 
-def test_archived_target_list_item_removed() -> None:
-    # Archived targets are excluded by the published-revision query, exactly
-    # like unpublished or missing ones; inside a list they are dropped.
+def test_missing_target_list_item_removed() -> None:
     harness = Harness()
     kept = harness.queries.publish(1, SPECIES, {"title": "Kept"})
 
@@ -435,7 +441,7 @@ class SequenceIds:
 _ACTOR_CONTEXT = ContentActor(id=ACTOR, is_staff=True, permissions=frozenset())
 
 
-def _create_published(data: dict[str, object], *, id_start: int) -> ContentId:
+def _publish_new(data: dict[str, object], *, id_start: int) -> tuple[ContentId, int]:
     content_types = FakeContentTypes()
     created = create_content(
         CreateContent(type_key=SPECIES, schema_version=1, data=data, actor_id=ACTOR),
@@ -447,7 +453,7 @@ def _create_published(data: dict[str, object], *, id_start: int) -> ContentId:
         policy=AllowAllPolicy(),
         actor=_ACTOR_CONTEXT,
     )
-    publish_content(
+    published = publish_content(
         PublishContent(
             content_id=created.content_id,
             revision_id=created.revision_id,
@@ -461,7 +467,48 @@ def _create_published(data: dict[str, object], *, id_start: int) -> ContentId:
         policy=AllowAllPolicy(),
         actor=_ACTOR_CONTEXT,
     )
-    return created.content_id
+    return created.content_id, published.content_version
+
+
+def _create_published(data: dict[str, object], *, id_start: int) -> ContentId:
+    return _publish_new(data, id_start=id_start)[0]
+
+
+def _django_resolver() -> LinkResolver:
+    return LinkResolver(
+        queries=DjangoContentDeliveryQueries(),
+        content_types=FakeContentTypes(),
+        blobs=DjangoMediaBlobRepository(),
+        files=FakeFiles(),
+        routes=DjangoRoutePathProjection(),
+    )
+
+
+@pytest.mark.django_db
+def test_archived_target_list_item_removed() -> None:
+    kept = _create_published({"title": "Kept shark"}, id_start=1_000)
+    archived, version = _publish_new({"title": "Archived shark"}, id_start=2_000)
+    archive_content(
+        ArchiveContent(content_id=archived, expected_version=version, actor_id=ACTOR),
+        uow=DjangoContentUnitOfWork(clock=FixedClock()),
+        clock=FixedClock(),
+        ids=SequenceIds(3_000),
+        policy=AllowAllPolicy(),
+        actor=_ACTOR_CONTEXT,
+    )
+
+    assert archived not in DjangoContentDeliveryQueries().published_revisions(
+        frozenset({archived, kept})
+    )
+    resolved = _django_resolver().resolve(
+        {"single": _ref(archived), "items": [_ref(archived), _ref(kept)]}
+    )
+
+    assert resolved["single"] is None
+    items = resolved["items"]
+    assert isinstance(items, list)
+    assert [item["id"] for item in items if isinstance(item, dict)] == [str(kept)]
+    assert "Archived shark" not in repr(resolved)
 
 
 @pytest.mark.django_db

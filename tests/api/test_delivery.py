@@ -7,12 +7,14 @@ from rest_framework.test import APIClient
 
 from strata_cms.api.delivery import views as delivery_views
 from strata_cms.application.content.commands import (
+    ArchiveContent,
     CreateContent,
     CreateRevision,
     PublishContent,
 )
 from strata_cms.application.content.results import ContentWriteResult
 from strata_cms.application.content.use_cases import (
+    archive_content,
     create_content,
     create_revision,
     publish_content,
@@ -373,6 +375,9 @@ def _reference_service() -> RegistryContentTypeService:
                 ReferenceFieldDefinition(
                     LinkPath.parse("related"), frozenset({_SPECIES})
                 ),
+                ReferenceFieldDefinition(
+                    LinkPath.parse("items"), frozenset({_SPECIES}), many=True
+                ),
             ),
         )
     )
@@ -483,3 +488,51 @@ def test_delivery_endpoint_never_returns_draft_target_title(
         "Published shark"
     )
     assert "Draft secret" not in listing.content.decode()
+
+
+def test_delivery_endpoint_omits_archived_reference_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content_types = _reference_service()
+    monkeypatch.setattr(services, "get_content_type_service", lambda: content_types)
+    monkeypatch.setattr(
+        delivery_views, "get_content_type_service", lambda: content_types
+    )
+    kept = _write(content_types, _SPECIES, {"title": "Kept shark"})
+    _publish_result(content_types, kept)
+    archived = _write(content_types, _SPECIES, {"title": "Archived shark"})
+    archived_version = _publish_result(content_types, archived)
+    source = _write(
+        content_types,
+        _PROFILE,
+        {
+            "related": {"$ref": str(archived.content_id)},
+            "items": [
+                {"$ref": str(archived.content_id)},
+                {"$ref": str(kept.content_id)},
+            ],
+        },
+    )
+    _publish_result(content_types, source)
+    archive_content(
+        ArchiveContent(
+            content_id=archived.content_id,
+            expected_version=archived_version,
+            actor_id=_ACTOR,
+        ),
+        uow=DjangoContentUnitOfWork(clock=DjangoClock()),
+        clock=DjangoClock(),
+        ids=Uuid4Generator(),
+        policy=_AllowAll(),
+        actor=_ACTOR_CONTEXT,
+    )
+
+    response = APIClient().get(
+        reverse("api:delivery:content-detail", args=[source.content_id])
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["related"] is None
+    assert [item["id"] for item in data["items"]] == [str(kept.content_id)]
+    assert "Archived shark" not in response.content.decode()
