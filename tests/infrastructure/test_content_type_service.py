@@ -8,6 +8,7 @@ from strata_cms.application.errors import (
     ContentTypeUnavailableError,
     InvalidContentDataError,
 )
+from strata_cms.application.ports.content_types import PreparedContentData
 from strata_cms.domain.revision import Revision, RevisionData
 from strata_cms.domain.value_objects import (
     ActorId,
@@ -24,7 +25,20 @@ from strata_cms.examples.simple_article import (
 )
 from strata_cms.examples.structured_page import LANDING_PAGE_TYPE
 from strata_cms.infrastructure.content_types import RegistryContentTypeService
-from strata_cms.plugin_api import StrataRegistryBuilder, ValidationIssue
+from strata_cms.plugin_api import (
+    BlobFieldDefinition,
+    BlockDefinition,
+    BlockFieldDefinition,
+    BlockSlotDefinition,
+    BlockTypeKey,
+    ContentTypeDefinition,
+    LinkPath,
+    PluginDefinition,
+    PluginKey,
+    ReferenceFieldDefinition,
+    StrataRegistryBuilder,
+    ValidationIssue,
+)
 
 
 def _service() -> RegistryContentTypeService:
@@ -204,3 +218,304 @@ def test_publish_issues_empty_without_readiness() -> None:
     )
 
     assert _service().publish_issues(revision) == ()
+
+
+# --- link extraction and write-time link validation ---------------------------
+
+_U = "00000000-0000-0000-0000-00000000000{}"
+_TARGET = ContentTypeKey("tests.target")
+_PAGE = ContentTypeKey("tests.page")
+_IMAGE = BlockTypeKey("tests.image")
+
+
+class _DictSchema:
+    value_type: type[dict[str, object]] = dict
+
+    def deserialize(self, data: RevisionData) -> dict[str, object]:
+        return data.as_dict()
+
+    def serialize(self, value: dict[str, object]) -> RevisionData:
+        return RevisionData.from_mapping(value)
+
+    def validate(self, value: dict[str, object]) -> tuple[ValidationIssue, ...]:
+        del value
+        return ()
+
+
+def _title(value: dict[str, object]) -> str:
+    return str(value.get("title", ""))
+
+
+def _link_service(
+    *,
+    many: ReferenceFieldDefinition | None = None,
+    embed: bool = False,
+) -> RegistryContentTypeService:
+    builder = StrataRegistryBuilder()
+    plugin = PluginDefinition(
+        key=PluginKey("tests.links"),
+        version="1.0.0",
+        requires_strata=">=0.1,<0.2",
+    )
+    builder.register_plugin(plugin)
+    registrar = builder.registrar_for(plugin.key)
+    registrar.register_content_type(
+        ContentTypeDefinition(
+            key=_TARGET,
+            schema_version=1,
+            schema=_DictSchema(),
+            summary_title=_title,
+            embed_in_references=embed,
+        )
+    )
+    registrar.register_block_type(
+        BlockDefinition(
+            key=_IMAGE,
+            schema_version=1,
+            schema=_DictSchema(),
+            reference_fields=(
+                ReferenceFieldDefinition(LinkPath.parse("page"), frozenset({_TARGET})),
+            ),
+            blob_fields=(BlobFieldDefinition(LinkPath.parse("image")),),
+            slots=(BlockSlotDefinition("children"),),
+        )
+    )
+    references: tuple[ReferenceFieldDefinition, ...] = (
+        ReferenceFieldDefinition(LinkPath.parse("hero"), frozenset({_TARGET})),
+    )
+    if many is not None:
+        references += (many,)
+    registrar.register_content_type(
+        ContentTypeDefinition(
+            key=_PAGE,
+            schema_version=1,
+            schema=_DictSchema(),
+            reference_fields=references,
+            blob_fields=(BlobFieldDefinition(LinkPath.parse("cover")),),
+            block_fields=(BlockFieldDefinition(("body",), required=False),),
+        )
+    )
+    return RegistryContentTypeService(builder.build(strata_version="0.1.0"))
+
+
+def _prepare(
+    service: RegistryContentTypeService, data: dict[str, object]
+) -> PreparedContentData:
+    return service.prepare_for_write(type_key=_PAGE, schema_version=1, data=data)
+
+
+def _block(
+    number: int, data: dict[str, object], children: list[object] | None = None
+) -> dict[str, object]:
+    return {
+        "id": _U.format(number),
+        "type": "tests.image",
+        "version": 1,
+        "data": data,
+        "slots": {"children": children} if children is not None else {},
+    }
+
+
+def _problems(
+    service: RegistryContentTypeService, data: dict[str, object]
+) -> list[tuple[str, str]]:
+    with pytest.raises(InvalidContentDataError) as raised:
+        _prepare(service, data)
+    return [(p.code, p.path) for p in raised.value.problems]
+
+
+def test_extract_links_from_fields_and_blocks() -> None:
+    service = _link_service()
+    inner = _block(2, {"image": {"$blob": _U.format(6)}})
+    data: dict[str, object] = {
+        "hero": {"$ref": _U.format(3)},
+        "cover": {"$blob": _U.format(4)},
+        "body": [
+            _block(
+                1,
+                {"page": {"$ref": _U.format(5)}, "image": {"$blob": _U.format(7)}},
+                [inner],
+            )
+        ],
+    }
+    prepared = _prepare(service, data)
+
+    links = service.extract_links(type_key=_PAGE, data=prepared.data)
+
+    outer = _U.format(1)
+    assert [(link.location, str(link.target)) for link in links.references] == [
+        ("hero", _U.format(3)),
+        (f"body/blocks/{outer}/data/page", _U.format(5)),
+    ]
+    assert [(link.location, str(link.target)) for link in links.blobs] == [
+        ("cover", _U.format(4)),
+        (f"body/blocks/{outer}/data/image", _U.format(7)),
+        (
+            f"body/blocks/{outer}/slots/children/blocks/{_U.format(2)}/data/image",
+            _U.format(6),
+        ),
+    ]
+    assert all(link.kind == "reference" for link in links.references)
+    assert all(link.kind == "blob" for link in links.blobs)
+
+
+def test_declared_block_links_accepted_including_nested_slot_child() -> None:
+    service = _link_service()
+    child = _block(2, {"page": {"$ref": _U.format(3)}})
+    prepared = _prepare(
+        service,
+        {"body": [_block(1, {"image": {"$blob": _U.format(4)}}, [child])]},
+    )
+
+    assert prepared.data.as_dict()["body"]
+
+
+def test_extract_links_carries_allowed_types() -> None:
+    service = _link_service()
+    prepared = _prepare(
+        service,
+        {
+            "hero": {"$ref": _U.format(3)},
+            "cover": {"$blob": _U.format(4)},
+            "body": [_block(1, {"page": {"$ref": _U.format(5)}})],
+        },
+    )
+
+    links = service.extract_links(type_key=_PAGE, data=prepared.data)
+
+    assert [link.allowed_types for link in links.references] == [
+        frozenset({_TARGET}),
+        frozenset({_TARGET}),
+    ]
+    assert [link.allowed_types for link in links.blobs] == [frozenset()]
+
+
+def test_prepare_rejects_undeclared_ref() -> None:
+    service = _link_service()
+
+    assert _problems(service, {"elsewhere": {"$ref": _U.format(1)}}) == [
+        ("undeclared_link", "elsewhere")
+    ]
+
+
+def test_prepare_rejects_undeclared_link_in_block_data() -> None:
+    service = _link_service()
+    block = _block(1, {"other": {"$blob": _U.format(2)}})
+
+    assert _problems(service, {"body": [block]}) == [
+        ("undeclared_link", f"body/blocks/{_U.format(1)}/data/other")
+    ]
+
+
+def test_prepare_rejects_wrong_link_kind() -> None:
+    service = _link_service()
+
+    assert _problems(service, {"hero": {"$blob": _U.format(1)}}) == [
+        ("wrong_link_kind", "hero")
+    ]
+
+
+def test_prepare_rejects_malformed_links() -> None:
+    service = _link_service()
+    block = _block(1, {"page": {"$ref": "not-a-uuid"}})
+
+    assert _problems(
+        service,
+        {
+            "hero": {"$ref": _U.format(1), "extra": 1},
+            "cover": {"$blob": "NOT-CANONICAL"},
+            "body": [block],
+        },
+    ) == [
+        ("malformed_link", "hero"),
+        ("malformed_link", "cover"),
+        ("malformed_link", f"body/blocks/{_U.format(1)}/data/page"),
+    ]
+
+
+def test_prepare_rejects_reference_count_out_of_range() -> None:
+    many = ReferenceFieldDefinition(
+        LinkPath.parse("related"),
+        frozenset({_TARGET}),
+        many=True,
+        min_items=1,
+        max_items=2,
+    )
+    service = _link_service(many=many)
+    refs = [{"$ref": _U.format(n)} for n in range(1, 4)]
+
+    assert _problems(service, {"related": []}) == [
+        ("reference_count_out_of_range", "related")
+    ]
+    assert _problems(service, {"related": refs}) == [
+        ("reference_count_out_of_range", "related")
+    ]
+    assert (
+        _prepare(service, {"related": refs[:2]}).data.as_dict()["related"] == (refs[:2])
+    )
+
+
+def test_summary_title_and_embed_flag() -> None:
+    service = _link_service(embed=True)
+    revision = Revision(
+        id=RevisionId(UUID(int=2)),
+        content_id=ContentId(UUID(int=1)),
+        number=1,
+        content_type=_TARGET,
+        schema_version=1,
+        data=RevisionData.from_mapping({"title": "Hello"}),
+        created_at=datetime(2026, 9, 12, tzinfo=UTC),
+        created_by=ActorId("user:1"),
+    )
+
+    assert service.summary_title(revision) == "Hello"
+    assert service.embeds_in_references(_TARGET) is True
+    assert service.embeds_in_references(_PAGE) is False
+
+
+def test_summary_title_none_when_type_has_no_hook() -> None:
+    revision = Revision(
+        id=RevisionId(UUID(int=2)),
+        content_id=ContentId(UUID(int=1)),
+        number=1,
+        content_type=EXAMPLE_CONTENT_TYPE,
+        schema_version=2,
+        data=RevisionData.from_mapping({"title": "T", "body": ""}),
+        created_at=datetime(2026, 9, 12, tzinfo=UTC),
+        created_by=ActorId("user:1"),
+    )
+
+    assert _service().summary_title(revision) is None
+
+
+def test_blob_ids_from_historical_revision() -> None:
+    service = _link_service()
+    revision = Revision(
+        id=RevisionId(UUID(int=2)),
+        content_id=ContentId(UUID(int=1)),
+        number=1,
+        content_type=_PAGE,
+        schema_version=1,
+        data=RevisionData.from_mapping(
+            {
+                "cover": {"$blob": _U.format(4)},
+                "body": [_block(1, {"image": {"$blob": _U.format(7)}})],
+            }
+        ),
+        created_at=datetime(2026, 9, 12, tzinfo=UTC),
+        created_by=ActorId("user:1"),
+    )
+
+    assert service.blob_ids(revision) == frozenset(
+        {UUID(_U.format(4)), UUID(_U.format(7))}
+    )
+
+
+def test_prepare_rejects_non_list_for_many_reference_field() -> None:
+    many = ReferenceFieldDefinition(
+        LinkPath.parse("related"), frozenset({_TARGET}), many=True
+    )
+
+    assert _problems(_link_service(many=many), {"related": "nope"}) == [
+        ("malformed_link", "related")
+    ]

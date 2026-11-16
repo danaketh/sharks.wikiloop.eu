@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from uuid import UUID
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -9,11 +10,12 @@ from rest_framework.test import APIClient
 from strata_cms.api.management import views
 from strata_cms.application.errors import ContentDataProblem
 from strata_cms.application.ports.content_types import (
+    ContentLinks,
     ContentTypeService,
     PreparedContentData,
 )
 from strata_cms.config.services import get_content_type_service
-from strata_cms.domain.revision import Revision
+from strata_cms.domain.revision import Revision, RevisionData
 from strata_cms.domain.value_objects import ContentTypeKey
 from strata_cms.examples.simple_article import EXAMPLE_CONTENT_TYPE
 from strata_cms.infrastructure.persistence.django.models import ContentRecord
@@ -389,6 +391,20 @@ class _NotReadyContentTypes:
 
     def delivery_data(self, revision: Revision) -> dict[str, object]:
         return self._inner.delivery_data(revision)
+
+    def extract_links(
+        self, *, type_key: ContentTypeKey, data: RevisionData
+    ) -> ContentLinks:
+        return self._inner.extract_links(type_key=type_key, data=data)
+
+    def summary_title(self, revision: Revision) -> str | None:
+        return self._inner.summary_title(revision)
+
+    def embeds_in_references(self, type_key: ContentTypeKey) -> bool:
+        return self._inner.embeds_in_references(type_key)
+
+    def blob_ids(self, revision: Revision) -> frozenset[UUID]:
+        return self._inner.blob_ids(revision)
 
 
 def _create_article(client: APIClient) -> dict[str, object]:

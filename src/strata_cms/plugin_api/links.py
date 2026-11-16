@@ -7,13 +7,14 @@ knowing the plugin schema. Any link object at an undeclared path is invalid.
 """
 
 import re
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, Self
 from uuid import UUID
 
 from strata_cms.domain.value_objects import ContentTypeKey
 from strata_cms.plugin_api.errors import RegistryConfigurationError, SchemaDecodeError
+from strata_cms.plugin_api.schema import ValidationIssue
 
 REF_KEY = "$ref"
 BLOB_KEY = "$blob"
@@ -170,6 +171,7 @@ class LinkOccurrence:
     kind: Literal["reference", "blob"]
     location: str
     target: UUID
+    allowed_types: frozenset[ContentTypeKey] = frozenset()
 
 
 def join_location(trail: tuple[str, ...]) -> str:
@@ -295,3 +297,100 @@ def require_unique_link_paths(
         raise RegistryConfigurationError(
             f"{owner} declares a link field path more than once."
         )
+
+
+_VIOLATION_CODES = {
+    "undeclared": "undeclared_link",
+    "wrong_kind": "wrong_link_kind",
+    "malformed": "malformed_link",
+}
+
+
+def _located(prefix: str, location: str) -> str:
+    return f"{prefix}/{location}" if prefix else location
+
+
+def link_issues(
+    data: Mapping[str, object],
+    references: Sequence[ReferenceFieldDefinition],
+    blobs: Sequence[BlobFieldDefinition],
+    *,
+    prefix: str = "",
+) -> tuple[ValidationIssue, ...]:
+    """Validate link encoding and reference cardinality in one payload.
+
+    ``data`` is scanned as given (see :func:`find_undeclared_links` for the
+    block-envelope caveat) against the declared ``references``/``blobs``.
+    Issue paths are link locations, optionally under ``prefix``. Codes:
+    ``undeclared_link``, ``wrong_link_kind``, ``malformed_link`` and
+    ``reference_count_out_of_range``.
+    """
+    violations = find_undeclared_links(
+        data,
+        [field.link_path for field in references],
+        [field.link_path for field in blobs],
+    )
+    issues = [
+        ValidationIssue(
+            code=_VIOLATION_CODES[violation.reason],
+            message=f"Invalid link at '{violation.location}': {violation.reason}.",
+            path=_located(prefix, violation.location),
+        )
+        for violation in violations
+    ]
+    reported = {violation.location for violation in violations}
+
+    def malformed(location: str, message: str) -> None:
+        if location not in reported:
+            reported.add(location)
+            issues.append(
+                ValidationIssue(
+                    code="malformed_link",
+                    message=message,
+                    path=_located(prefix, location),
+                )
+            )
+
+    for reference in references:
+        for location, raw in iter_link_values(data, reference.link_path):
+            try:
+                ContentReference.from_json(raw)
+            except SchemaDecodeError as exc:
+                malformed(location, str(exc))
+        if reference.many:
+            _check_cardinality(data, reference, prefix, issues, malformed)
+    for blob in blobs:
+        for location, raw in iter_link_values(data, blob.link_path):
+            try:
+                BlobReference.from_json(raw)
+            except SchemaDecodeError as exc:
+                malformed(location, str(exc))
+    return tuple(issues)
+
+
+def _check_cardinality(
+    data: Mapping[str, object],
+    reference: ReferenceFieldDefinition,
+    prefix: str,
+    issues: list[ValidationIssue],
+    malformed: Callable[[str, str], None],
+) -> None:
+    for location, raw in iter_link_values(data, reference.path):
+        if not isinstance(raw, list):
+            malformed(location, f"Reference list at '{location}' must be an array.")
+            continue
+        count = len(raw)
+        too_few = count < reference.min_items
+        too_many = reference.max_items is not None and count > reference.max_items
+        if too_few or too_many:
+            upper = "unlimited" if reference.max_items is None else reference.max_items
+            issues.append(
+                ValidationIssue(
+                    code="reference_count_out_of_range",
+                    message=(
+                        f"Expected {reference.min_items} to {upper} references, "
+                        f"got {count}."
+                    ),
+                    path=_located(prefix, location),
+                )
+            )

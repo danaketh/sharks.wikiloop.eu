@@ -7,7 +7,10 @@ from strata_cms.application.errors import ContentDataProblem
 from strata_cms.application.ports.content_delivery import (
     PublishedRevision,
 )
-from strata_cms.application.ports.content_types import PreparedContentData
+from strata_cms.application.ports.content_types import (
+    ContentLinks,
+    PreparedContentData,
+)
 from strata_cms.application.ports.messaging import MessageEnvelope
 from strata_cms.application.ports.search import (
     SearchCapability,
@@ -59,6 +62,24 @@ class FakeContentTypes:
 
     def delivery_data(self, revision: Revision) -> dict[str, object]:
         return revision.data.as_dict()
+
+    def extract_links(
+        self, *, type_key: ContentTypeKey, data: RevisionData
+    ) -> ContentLinks:
+        del type_key, data
+        return ContentLinks()
+
+    def summary_title(self, revision: Revision) -> str | None:
+        del revision
+        return None
+
+    def embeds_in_references(self, type_key: ContentTypeKey) -> bool:
+        del type_key
+        return False
+
+    def blob_ids(self, revision: Revision) -> frozenset[UUID]:
+        del revision
+        return frozenset()
 
 
 class FakeSearch:

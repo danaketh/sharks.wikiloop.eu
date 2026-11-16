@@ -55,6 +55,7 @@ from strata_cms.plugin_api.links import (
     LinkOccurrence,
     ReferenceFieldDefinition,
     iter_link_values,
+    link_issues,
 )
 from strata_cms.plugin_api.schema import ValidationIssue
 
@@ -411,6 +412,53 @@ class BlockTypeRegistry:
             )
         return tuple(found)
 
+    def link_issues(
+        self,
+        data: RevisionData,
+        fields: tuple[BlockFieldDefinition, ...],
+    ) -> tuple[ValidationIssue, ...]:
+        """Validate link encoding/cardinality in every block's data, recursively.
+
+        Each block's ``data`` is checked against its own block type's declared
+        link paths, never the content type's. ``data`` must already be
+        normalized to current block schemas.
+        """
+        raw = data.as_dict()
+        issues: list[ValidationIssue] = []
+        for field in fields:
+            value = _read_path(raw, field.path)
+            if value is _MISSING:
+                continue
+            self._collection_link_issues(
+                BlockCollection.from_json(value),
+                prefix="/".join(field.path),
+                issues=issues,
+            )
+        return tuple(issues)
+
+    def _collection_link_issues(
+        self,
+        collection: BlockCollection,
+        *,
+        prefix: str,
+        issues: list[ValidationIssue],
+    ) -> None:
+        for block in collection:
+            base = f"{prefix}/blocks/{block.id}"
+            definition = self.require(block.type_key).definition
+            issues.extend(
+                link_issues(
+                    block.data.as_dict(),
+                    definition.reference_fields,
+                    definition.blob_fields,
+                    prefix=f"{base}/data",
+                )
+            )
+            for name, children in block.slots:
+                self._collection_link_issues(
+                    children, prefix=f"{base}/slots/{name}", issues=issues
+                )
+
     def _collect_collection_links(
         self,
         collection: BlockCollection,
@@ -429,6 +477,7 @@ class BlockTypeRegistry:
                             "reference",
                             f"{base}/data/{location}",
                             ContentReference.from_json(raw).target,
+                            reference.allowed_types,
                         )
                     )
             for blob in definition.blob_fields:
