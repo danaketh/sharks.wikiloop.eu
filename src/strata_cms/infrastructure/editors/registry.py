@@ -201,6 +201,7 @@ def _scalar_spec(
             for choice in field.choices
         ),
         reference_types=_reference_types(field, reference_fields),
+        reference_many=_reference_many(field, reference_fields),
     )
 
 
@@ -215,6 +216,20 @@ def _reference_types(
         if reference.path.segments == field.path:
             return tuple(sorted(str(key) for key in reference.allowed_types))
     return tuple(sorted(str(key) for key in field.reference_types))
+
+
+def _reference_many(
+    field: ScalarEditorField,
+    reference_fields: tuple[ReferenceFieldDefinition, ...],
+) -> bool:
+    """Report list cardinality from the semantic reference definition."""
+    if field.input_kind is not EditorInputKind.REFERENCE:
+        return False
+    return any(
+        reference.many
+        for reference in reference_fields
+        if reference.path.segments == field.path
+    )
 
 
 def _constraint_spec(constraint: BlockListConstraint) -> BlockConstraintSpec:

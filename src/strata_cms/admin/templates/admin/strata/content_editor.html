@@ -10,6 +10,7 @@
   {{ editor_schema|json_script:"cms-editor-schema" }}
   {{ editor_document|json_script:"cms-editor-document" }}
   {{ editor_endpoints|json_script:"cms-editor-endpoints" }}
+  {{ editor_media|json_script:"cms-editor-media" }}
 
   <form id="cms-editor-csrf" hidden>{% csrf_token %}</form>
 
@@ -24,6 +25,7 @@
         <button type="button" class="button" id="cms-editor-publish">Publish</button>
       </div>
     </div>
+    <div id="cms-editor-readiness" class="cms-editor-readiness" role="status" aria-live="polite" hidden></div>
     <div id="cms-editor-errors" class="cms-editor-errors" hidden></div>
     <div id="cms-editor-fields"></div>
   </div>

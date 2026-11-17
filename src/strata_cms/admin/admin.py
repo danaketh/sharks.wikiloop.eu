@@ -15,6 +15,7 @@ from unfold.admin import ModelAdmin
 
 from strata_cms.application.content.commands import ArchiveContent, RestoreContent
 from strata_cms.application.content.use_cases import archive_content, restore_content
+from strata_cms.application.editor_models import ScalarEditorFieldSpec
 from strata_cms.application.errors import (
     ContentNotFoundError,
     ContentTypeUnavailableError,
@@ -30,6 +31,7 @@ from strata_cms.config.services import (
     get_id_generator,
     new_content_uow,
 )
+from strata_cms.contrib.media.schema import MEDIA_CONTENT_TYPE
 from strata_cms.domain.errors import (
     ConcurrentModificationError,
     InvalidContentTypeKeyError,
@@ -287,6 +289,17 @@ class ContentRecordAdmin(ModelAdmin):
             "editor_document": document,
             "editor_endpoints": {
                 "create": reverse("api:management:content-create"),
+                "picker": reverse("api:management:content-create"),
+                "markdown_preview": reverse("api:management:markdown-preview"),
+                "blob_upload": reverse("api:management:media-blob-upload"),
+                "document": (
+                    reverse(
+                        "api:management:content-detail",
+                        args=[document["content_id"]],
+                    )
+                    if not document["is_new"]
+                    else None
+                ),
                 "revision": (
                     reverse(
                         "api:management:content-revision-create",
@@ -331,6 +344,7 @@ class ContentRecordAdmin(ModelAdmin):
                     "admin:strata_persistence_contentrecord_changelist"
                 ),
             },
+            "editor_media": _media_upload_config(),
             **(extra_context or {}),
         }
         return TemplateResponse(
@@ -338,3 +352,30 @@ class ContentRecordAdmin(ModelAdmin):
             "admin/strata/content_editor.html",
             context,
         )
+
+
+def _media_upload_config() -> dict[str, object] | None:
+    """Describe how the editor may create a media draft after a blob upload.
+
+    ``None`` when the media content type is not installed or not editable, so
+    reference pickers hide their "Upload new" action.
+    """
+    media = get_editor_catalog().get_content_type(MEDIA_CONTENT_TYPE)
+    if media is None or not media.editable:
+        return None
+    blob_path = next(
+        (
+            field.path
+            for field in media.fields
+            if isinstance(field, ScalarEditorFieldSpec) and field.input_kind == "blob"
+        ),
+        None,
+    )
+    if blob_path is None:
+        return None
+    return {
+        "type": media.key,
+        "schema_version": media.schema_version,
+        "initial_data": media.initial_data,
+        "blob_path": list(blob_path),
+    }

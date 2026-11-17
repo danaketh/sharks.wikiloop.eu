@@ -161,7 +161,7 @@ class _DictSchema:
 
 
 def _reference_catalog(
-    *, editor_types: tuple[ContentTypeKey, ...]
+    *, editor_types: tuple[ContentTypeKey, ...], many: bool = False
 ) -> RegistryEditorCatalog:
     species = ContentTypeKey("tests.species")
     profile = ContentTypeKey("tests.profile")
@@ -188,7 +188,7 @@ def _reference_catalog(
             schema=_DictSchema(),
             reference_fields=(
                 ReferenceFieldDefinition(
-                    LinkPath.parse("species"), frozenset({species})
+                    LinkPath.parse("species"), frozenset({species}), many=many
                 ),
             ),
             editor=ContentEditorDefinition(
@@ -221,10 +221,12 @@ def test_editor_contract_exposes_reference_types() -> None:
     assert isinstance(species, ScalarEditorFieldSpec)
     assert species.input_kind == "reference"
     assert species.reference_types == ("tests.species",)
+    assert species.reference_many is False
     bio = by_path[("bio",)]
     assert isinstance(bio, ScalarEditorFieldSpec)
     assert bio.input_kind == "markdown"
     assert bio.reference_types == ()
+    assert bio.reference_many is False
 
 
 def test_editor_reference_types_follow_the_reference_field_definition() -> None:
@@ -236,3 +238,14 @@ def test_editor_reference_types_follow_the_reference_field_definition() -> None:
     species = next(f for f in editor.fields if f.path == ("species",))
     assert isinstance(species, ScalarEditorFieldSpec)
     assert species.reference_types == ("tests.species",)
+
+
+def test_editor_contract_marks_many_reference_fields() -> None:
+    editor = _reference_catalog(
+        editor_types=(ContentTypeKey("tests.species"),), many=True
+    ).get_content_type(ContentTypeKey("tests.profile"))
+
+    assert editor is not None
+    species = next(f for f in editor.fields if f.path == ("species",))
+    assert isinstance(species, ScalarEditorFieldSpec)
+    assert species.reference_many is True
