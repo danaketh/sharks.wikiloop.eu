@@ -434,3 +434,61 @@ def test_animation_within_total_pixel_budget_accepted(
     assert getattr(output, "n_frames", 1) == 4
     if preserve_original:
         assert processed.data == source
+
+
+def test_gif_without_loop_extension_does_not_gain_one() -> None:
+    frames = [Image.new("RGB", (10, 10), (i * 80, 0, 0)) for i in range(1, 4)]
+    source = _encode(
+        frames[0], "GIF", save_all=True, append_images=frames[1:], duration=100
+    )
+    assert "loop" not in Image.open(BytesIO(source)).info
+
+    processed = PROCESSOR.process(source, preserve_original=False)
+
+    output = Image.open(BytesIO(processed.data))
+    assert getattr(output, "n_frames", 1) == 3
+    assert "loop" not in output.info
+    assert b"NETSCAPE2.0" not in processed.data
+
+
+def test_gif_loop_count_is_kept() -> None:
+    frames = [Image.new("RGB", (10, 10), (i * 80, 0, 0)) for i in range(1, 3)]
+    source = _encode(frames[0], "GIF", save_all=True, append_images=frames[1:], loop=3)
+
+    processed = PROCESSOR.process(source, preserve_original=False)
+
+    assert Image.open(BytesIO(processed.data)).info.get("loop") == 3
+
+
+@pytest.mark.parametrize("orientation", [5, 6, 7, 8])
+def test_preserve_original_reports_displayed_dimensions(orientation: int) -> None:
+    exif = Image.Exif()
+    exif[ORIENTATION] = orientation
+    source = _encode(Image.new("RGB", (100, 50)), "JPEG", exif=exif)
+
+    processed = PROCESSOR.process(source, preserve_original=True)
+
+    assert processed.data == source
+    assert (processed.width, processed.height) == (50, 100)
+
+
+@pytest.mark.parametrize("orientation", [1, 2, 3, 4])
+def test_preserve_original_keeps_unrotated_dimensions(orientation: int) -> None:
+    exif = Image.Exif()
+    exif[ORIENTATION] = orientation
+    source = _encode(Image.new("RGB", (100, 50)), "JPEG", exif=exif)
+
+    processed = PROCESSOR.process(source, preserve_original=True)
+
+    assert (processed.width, processed.height) == (100, 50)
+
+
+def test_isobmff_brand_scan_is_capped() -> None:
+    # A huge declared ftyp size must not make the sniffer scan the whole upload.
+    header = b"\x7f\xff\xff\xffftypisom\x00\x00\x00\x00"
+    payload = header + b"\x00" * 4096 + b"heic"
+
+    with pytest.raises(UnsupportedMediaError) as error:
+        PROCESSOR.process(payload, preserve_original=False)
+
+    assert error.value.reason == "media_unreadable"

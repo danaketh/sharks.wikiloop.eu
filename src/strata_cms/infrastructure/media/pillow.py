@@ -37,6 +37,11 @@ _KEPT_INFO_KEYS = frozenset(
 )
 
 _SVG_PROBE_BYTES = 1024
+# Real ``ftyp`` boxes list a handful of brands; never scan further than this,
+# whatever size the (untrusted) box header declares.
+_FTYP_SCAN_BYTES = 256
+_EXIF_ORIENTATION = 0x0112
+_TRANSPOSING_ORIENTATIONS = frozenset({5, 6, 7, 8})
 _LOSSY_QUALITY = 95
 
 
@@ -148,6 +153,9 @@ class PillowImageProcessor:
             # Validate every frame without retaining decoded frames.
             for frame in _frames(image):
                 frame.load()
+            # Report what viewers display: EXIF orientations 5-8 swap axes.
+            if image.getexif().get(_EXIF_ORIENTATION) in _TRANSPOSING_ORIENTATIONS:
+                width, height = height, width
             return ProcessedImage(
                 data=data,
                 content_type=image_type.content_type,
@@ -225,7 +233,10 @@ def _encode(
         params["save_all"] = True
         params["append_images"] = frames[1:]
         params["duration"] = [frame.info.get("duration", 0) for frame in frames]
-        params["loop"] = source.info.get("loop", 0)
+        # Absent loop info means "play once" (GIF without NETSCAPE extension);
+        # passing a default would silently turn it into an endless loop.
+        if "loop" in source.info:
+            params["loop"] = source.info["loop"]
     buffer = BytesIO()
     first.save(buffer, image_type.pillow_format, **params)
     return buffer.getvalue(), first.width, first.height
@@ -236,7 +247,7 @@ def _isobmff_brands(data: bytes) -> frozenset[bytes]:
     if len(data) < 16:  # noqa: PLR2004 - size(4) + "ftyp"(4) + major(4) + minor(4)
         return frozenset()
     box_size = int.from_bytes(data[0:4], "big")
-    end = min(max(box_size, 16), len(data))
+    end = min(max(box_size, 16), len(data), _FTYP_SCAN_BYTES)
     brands = {data[8:12]}
     brands.update(data[offset : offset + 4] for offset in range(16, end - 3, 4))
     return frozenset(brands)
