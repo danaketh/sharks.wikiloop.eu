@@ -139,7 +139,7 @@ def validate_markdown(
     )
     parser = _validation_parser(profile.max_nesting_depth)
     tokens = parser.parse(source)
-    if _too_deep(source, tokens, profile.max_nesting_depth):
+    if _too_deep(tokens, profile.max_nesting_depth):
         report(
             "markdown_nesting_too_deep",
             f"Nesting deeper than {profile.max_nesting_depth} levels is not allowed.",
@@ -164,13 +164,30 @@ class _ValidationParser(MarkdownIt):
         return True
 
 
+def _parser_nesting_limit(max_nesting_depth: int) -> int:
+    """Return markdown-it's ``maxNesting`` for one profile depth cap."""
+    return 4 * max_nesting_depth + 16
+
+
+def _inline_bracket_limit(max_nesting_depth: int) -> int:
+    """Return the deepest link-label bracket nesting validation accepts.
+
+    markdown-it's inline recursion level grows by one per still-open ``[``
+    while it scans a link label (unmatched brackets included), and past
+    ``maxNesting`` it silently stops recognizing links. Half the parser limit
+    keeps a wide margin, so accepted source is never truncated.
+    """
+    return _parser_nesting_limit(max_nesting_depth) // 2
+
+
 @cache
 def _validation_parser(max_nesting_depth: int) -> MarkdownIt:
     # markdown-it silently drops everything past ``maxNesting``. The limit sits
-    # far above what the depth check allows (a container costs at most two
-    # levels), so any source deep enough to be truncated has already tripped
-    # the nesting check and cannot hide content from validation.
-    limit = 4 * max_nesting_depth + 16
+    # far above what the depth checks allow (a container costs at most two
+    # levels; inline brackets are capped at half the limit), so any source deep
+    # enough to be truncated has already tripped the nesting check and cannot
+    # hide content from validation.
+    limit = _parser_nesting_limit(max_nesting_depth)
     return _ValidationParser("commonmark", {"html": True, "maxNesting": limit}).enable(
         "table"
     )
@@ -179,9 +196,10 @@ def _validation_parser(max_nesting_depth: int) -> MarkdownIt:
 _PREVIEW_PARSER = MarkdownIt("commonmark", {"html": False}).enable("table")
 
 
-def _too_deep(source: str, tokens: list[Token], max_depth: int) -> bool:
-    """Detect container or link-label nesting beyond the profile cap."""
+def _too_deep(tokens: list[Token], max_depth: int) -> bool:
+    """Detect container nesting beyond the profile cap or near-limit labels."""
     containers = 0
+    bracket_limit = _inline_bracket_limit(max_depth)
     for token in tokens:
         if token.type in _CONTAINER_OPEN:
             containers += 1
@@ -189,19 +207,55 @@ def _too_deep(source: str, tokens: list[Token], max_depth: int) -> bool:
             containers -= 1
         if containers > max_depth:
             return True
-    return _bracket_depth(source) > max_depth
+        if token.type == "inline" and _bracket_depth(token.content) >= bracket_limit:
+            return True
+    return False
 
 
-def _bracket_depth(source: str) -> int:
-    """Return the deepest ``[`` nesting; conservative guard for inline links."""
+def _bracket_depth(content: str) -> int:
+    """Return the deepest still-open ``[`` count within one inline token.
+
+    Mirrors how markdown-it recurses while scanning link labels: backslash
+    escapes and closed code spans are skipped (the parser consumes them whole),
+    unmatched ``[`` keep counting. Anything uncertain over-counts, which only
+    rejects more input, never less.
+    """
     depth = deepest = 0
-    for char in source:
+    index = 0
+    length = len(content)
+    while index < length:
+        char = content[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == "`":
+            index = _skip_code_span(content, index)
+            continue
         if char == "[":
             depth += 1
             deepest = max(deepest, depth)
         elif char == "]" and depth:
             depth -= 1
+        index += 1
     return deepest
+
+
+def _skip_code_span(content: str, start: int) -> int:
+    """Return the index after a code span opened at ``start``, or its run."""
+    run_end = start
+    while run_end < len(content) and content[run_end] == "`":
+        run_end += 1
+    run = run_end - start
+    search = run_end
+    while (found := content.find("`" * run, search)) != -1:
+        closer_end = found + run
+        if closer_end < len(content) and content[closer_end] == "`":
+            while closer_end < len(content) and content[closer_end] == "`":
+                closer_end += 1
+            search = closer_end
+            continue
+        return closer_end
+    return run_end
 
 
 def _walk(tokens: list[Token]) -> list[Token]:

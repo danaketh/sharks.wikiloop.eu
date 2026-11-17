@@ -168,6 +168,46 @@ def test_deep_link_label_nesting_is_reported() -> None:
     assert "markdown_nesting_too_deep" in {i.code for i in validate_markdown(src)}
 
 
+def test_interval_notation_across_paragraphs_is_allowed() -> None:
+    src = "\n\n".join(f"Range [0, {n}) applies." for n in range(12)) + "\n"
+
+    assert validate_markdown(src) == ()
+
+
+def test_interval_notation_within_one_paragraph_is_allowed() -> None:
+    src = " ".join(f"[0, {n})" for n in range(12)) + "\n"
+
+    assert validate_markdown(src) == ()
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "```\n" + "[" * 30 + "\n```\n",
+        "    " + "[" * 30 + "\n",
+        "Use `" + "[" * 30 + "` here.\n",
+        "Use ``a ` " + "[" * 30 + "`` here.\n",
+        "Escaped " + "\\[" * 30 + " text.\n",
+    ],
+)
+def test_brackets_in_code_or_escaped_do_not_count_as_nesting(src: str) -> None:
+    assert validate_markdown(src) == ()
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "[" * 30 + "[x](javascript:alert(1))\n",
+        "[" * 47 + "[x](javascript:alert(1))\n",
+        "`unclosed " + "[" * 30 + "[x](javascript:alert(1))\n",
+        "\\\\" + "[" * 30 + "[x](javascript:alert(1))\n",
+        "> " + "[" * 60 + "x\n",
+    ],
+)
+def test_bracket_nesting_near_parser_limit_is_reported(src: str) -> None:
+    assert "markdown_nesting_too_deep" in {i.code for i in validate_markdown(src)}
+
+
 def test_reasonable_nesting_is_allowed() -> None:
     lines = [f"{'  ' * i}- item {i}" for i in range(4)]
     src = "\n".join("> " + line for line in lines) + "\n\n> *a **b *c* d** e*\n"
