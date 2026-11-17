@@ -668,3 +668,30 @@ def test_rebuild_keeps_blob_usage_dropped_by_schema_migration(
     }
     assert DjangoMediaBlobRepository().delete_if_unused(blob) is False
     assert MediaBlobRecord.objects.filter(pk=blob).exists()
+
+
+def test_referencing_ignores_rows_of_superseded_published_revision(
+    content_types: RegistryContentTypeService,
+) -> None:
+    target = _create(content_types, SPECIES, {"title": "Thresher"})
+    _publish(content_types, target)
+    source = _create(
+        content_types, PROFILE, {"name": "Src", "related": _ref(target.content_id)}
+    )
+    version = _publish(content_types, source)
+    index = DjangoPublishedReferenceIndex()
+    links = content_types.revision_links(
+        revision_from_record(RevisionRecord.objects.get(pk=source.revision_id))
+    )
+    index.replace(source.content_id, source.revision_id, links.references)
+    assert index.referencing(
+        target.content_id, source_type=None, limit=20, offset=0
+    ) == ((source.content_id,), 1)
+
+    # Republished without the link; the index event has not run yet.
+    newer = _revise(content_types, source, {"name": "Src v2"}, expected_version=version)
+    _publish(content_types, newer)
+
+    assert index.referencing(
+        target.content_id, source_type=None, limit=20, offset=0
+    ) == ((), 0)

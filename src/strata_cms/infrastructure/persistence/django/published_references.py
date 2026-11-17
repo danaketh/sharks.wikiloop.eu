@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 from django.db import transaction
+from django.db.models import Exists, OuterRef
 
 from strata_cms.application.ports.content_types import ContentLink
 from strata_cms.domain.value_objects import ContentId, ContentTypeKey, RevisionId
@@ -106,14 +107,20 @@ class DjangoPublishedReferenceIndex:
         limit: int,
         offset: int,
     ) -> tuple[tuple[ContentId, ...], int]:
-        """Page currently published, non-archived sources, newest first."""
-        source_ids = (
-            ContentReferenceRecord.objects.using(self._using)
-            .filter(scope=_PUBLISHED, target_id=target_id)
-            .values("source_id")
+        """Page currently published, non-archived sources, newest first.
+
+        Only rows derived from a source's *current* published revision count,
+        so a republish that dropped the link hides the source immediately, even
+        before its index event has been handled.
+        """
+        current_rows = ContentReferenceRecord.objects.using(self._using).filter(
+            scope=_PUBLISHED,
+            target_id=target_id,
+            source_id=OuterRef("pk"),
+            source_revision_id=OuterRef("published_revision_id"),
         )
         sources = ContentRecord.objects.using(self._using).filter(
-            pk__in=source_ids,
+            Exists(current_rows),
             published_revision__isnull=False,
             published_at__isnull=False,
             archived_at__isnull=True,
