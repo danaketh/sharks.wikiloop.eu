@@ -8,9 +8,10 @@ inside one Unit of Work, so readers see either the old or the new projection.
 Links whose target content or blob no longer exists are skipped and reported
 (never fabricated), and revisions that the installed content types can no
 longer decode are skipped and reported, so one bad item never aborts the run.
-Blob usage of such skipped revisions is still recorded from a schema-agnostic
-scan of the stored JSON: orphan blob cleanup trusts these rows, so dropping
-them would delete files that stored revisions still link to.
+Blob usage of every revision (decodable or skipped) additionally includes a
+schema-agnostic scan of the stored JSON: orphan blob cleanup trusts these rows,
+and a current schema whose migration drops a blob field must not make cleanup
+delete files that stored history still links to.
 """
 
 from collections.abc import Callable
@@ -150,6 +151,7 @@ def _rebuild_draft_history(
             title=title,
             links=ContentLinks(references=references, blobs=blobs),
         )
+        _retain_stored_blob_usage(uow, revision)
         progress.revisions += 1
         recorded = True
     if recorded and history.archived:

@@ -34,6 +34,9 @@ from strata_cms.infrastructure.persistence.django.management.commands import (
     strata_rebuild_projections,
 )
 from strata_cms.infrastructure.persistence.django.mappers import revision_from_record
+from strata_cms.infrastructure.persistence.django.media import (
+    DjangoMediaBlobRepository,
+)
 from strata_cms.infrastructure.persistence.django.models import (
     ContentRecord,
     ContentReferenceRecord,
@@ -63,6 +66,8 @@ from strata_cms.plugin_api import (
     PluginDefinition,
     PluginKey,
     ReferenceFieldDefinition,
+    SchemaMigration,
+    SchemaMigrationSet,
     StrataRegistryBuilder,
     ValidationIssue,
 )
@@ -612,3 +617,54 @@ def test_published_index_remove_drops_rows_of_unpublished_source(
     index.remove(missing)
 
     assert not ContentReferenceRecord.objects.filter(scope="published").exists()
+
+
+def _profile_v2_without_image() -> RegistryContentTypeService:
+    """PROFILE v2 whose migration drops the v1 ``image`` blob field."""
+
+    def drop_image(data: RevisionData) -> RevisionData:
+        migrated = dict(data.as_dict())
+        migrated.pop("image", None)
+        return RevisionData.from_mapping(migrated)
+
+    builder = StrataRegistryBuilder()
+    plugin = PluginDefinition(
+        key=PluginKey("tests.rebuild"), version="2.0.0", requires_strata=">=0.1,<0.2"
+    )
+    builder.register_plugin(plugin)
+    builder.registrar_for(plugin.key).register_content_type(
+        ContentTypeDefinition(
+            key=PROFILE,
+            schema_version=2,
+            schema=_DictSchema(),
+            migrations=SchemaMigrationSet(
+                (SchemaMigration(from_version=1, to_version=2, migrate=drop_image),)
+            ),
+            summary_title=lambda value: str(value.get("name", "")),
+        )
+    )
+    return RegistryContentTypeService(builder.build(strata_version="0.1.0"))
+
+
+def test_rebuild_keeps_blob_usage_dropped_by_schema_migration(
+    content_types: RegistryContentTypeService,
+) -> None:
+    """Stored history still links the blob even if the current schema drops it."""
+    blob = _blob()
+    profile = _create(
+        content_types, PROFILE, {"name": "Old", "image": {"$blob": str(blob)}}
+    )
+    MediaBlobUsageRecord.objects.all().delete()
+
+    report = rebuild_projections(
+        RebuildScope.DRAFT,
+        new_uow=DjangoProjectionRebuildUnitOfWork,
+        content_types=_profile_v2_without_image(),
+    )
+
+    assert report.skipped_revisions == ()
+    assert set(MediaBlobUsageRecord.objects.values_list("blob_id", "revision_id")) == {
+        (blob, profile.revision_id)
+    }
+    assert DjangoMediaBlobRepository().delete_if_unused(blob) is False
+    assert MediaBlobRecord.objects.filter(pk=blob).exists()
