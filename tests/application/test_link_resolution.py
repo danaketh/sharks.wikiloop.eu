@@ -20,6 +20,7 @@ from strata_cms.application.content.use_cases import (
 from strata_cms.application.errors import (
     ContentDataProblem,
     ContentTypeUnavailableError,
+    InvalidContentDataError,
 )
 from strata_cms.application.ports.authorization import ContentAction, ContentActor
 from strata_cms.application.ports.content_delivery import PublishedRevision
@@ -57,7 +58,8 @@ ACTOR = ActorId("user:7")
 SPECIES = ContentTypeKey("tests.species")
 MEDIA = ContentTypeKey("tests.media")
 REMOVED = ContentTypeKey("tests.removed")
-INSTALLED = frozenset({SPECIES, MEDIA})
+BROKEN = ContentTypeKey("tests.broken")
+INSTALLED = frozenset({SPECIES, MEDIA, BROKEN})
 
 
 class FakeContentTypes:
@@ -94,6 +96,11 @@ class FakeContentTypes:
 
     def summary_title(self, revision: Revision) -> str | None:
         self._require(revision.content_type)
+        if revision.content_type == BROKEN:
+            raise InvalidContentDataError(
+                type_key=BROKEN,
+                problems=(ContentDataProblem(code="bad", message="Undecodable."),),
+            )
         title = revision.data.as_dict().get("title")
         return title if isinstance(title, str) else None
 
@@ -376,8 +383,74 @@ def test_nested_refs_in_embedded_data_not_expanded() -> None:
         "subject": {"id": str(nested)},
         "also": [{"id": str(nested)}],
     }
-    # Only the top-level target was loaded; the nested ref was not.
-    assert harness.queries.calls == [frozenset({media})]
+    # Nested refs are only checked for visibility in one extra batched call.
+    assert harness.queries.calls == [frozenset({media}), frozenset({nested})]
+
+
+def test_nested_refs_to_invisible_targets_resolve_to_null() -> None:
+    harness = Harness()
+    visible = harness.queries.publish(2, SPECIES, {"title": "Visible"})
+    uninstalled = harness.queries.publish(3, REMOVED, {"title": "Orphan"})
+    unpublished = UUID(int=404)
+    media = harness.queries.publish(
+        1,
+        MEDIA,
+        {
+            "title": "Fin",
+            "subject": _ref(unpublished),
+            "gone": _ref(uninstalled),
+            "also": [_ref(unpublished), _ref(visible), _ref(uninstalled)],
+        },
+    )
+
+    resolved = harness.resolver.resolve({"image": _ref(media)})
+
+    image = resolved["image"]
+    assert isinstance(image, dict)
+    assert image["data"] == {
+        "title": "Fin",
+        "subject": None,
+        "gone": None,
+        "also": [{"id": str(visible)}],
+    }
+    assert str(unpublished) not in repr(resolved)
+
+
+def test_nested_refs_already_loaded_need_no_extra_call() -> None:
+    harness = Harness()
+    nested = harness.queries.publish(2, SPECIES, {"title": "Shared"})
+    missing = UUID(int=404)
+    media = harness.queries.publish(
+        1, MEDIA, {"subject": _ref(nested), "other": _ref(missing)}
+    )
+
+    resolved = harness.resolver.resolve(
+        {"image": _ref(media), "related": _ref(nested), "lost": _ref(missing)}
+    )
+
+    image = resolved["image"]
+    assert isinstance(image, dict)
+    assert image["data"] == {"subject": {"id": str(nested)}, "other": None}
+    assert harness.queries.calls == [frozenset({media, nested, missing})]
+
+
+def test_undecodable_target_resolves_to_null_and_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = Harness()
+    broken = harness.queries.publish(1, BROKEN, {"title": "Broken"})
+    kept = harness.queries.publish(2, SPECIES, {"title": "Kept"})
+
+    with caplog.at_level("WARNING", logger="strata_cms.application.content.links"):
+        resolved = harness.resolver.resolve(
+            {"single": _ref(broken), "many": [_ref(broken), _ref(kept)]}
+        )
+
+    assert resolved["single"] is None
+    many = resolved["many"]
+    assert isinstance(many, list)
+    assert [item["id"] for item in many if isinstance(item, dict)] == [str(kept)]
+    assert str(broken) in caplog.text
 
 
 def test_one_batched_call_per_kind() -> None:

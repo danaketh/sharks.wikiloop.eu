@@ -2,16 +2,22 @@
 
 References become published summaries (never draft titles or unpublished
 targets); blob links become public blob descriptors. Every lookup is batched:
-one published-revision query for all references, one blob query for all blobs
-(including blobs inside embedded target data) and one route-path query.
+one published-revision query for all references, at most one more for
+references nested in embedded target data (emitted as bare ``{"id": ...}`` only
+when visible), one blob query for all blobs (including blobs inside embedded
+target data) and one route-path query.
 """
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
 
-from strata_cms.application.errors import ContentTypeUnavailableError
+from strata_cms.application.errors import (
+    ContentTypeUnavailableError,
+    InvalidContentDataError,
+)
 from strata_cms.application.ports.content_delivery import PublishedRevision
 from strata_cms.application.ports.content_types import ContentTypeService
 from strata_cms.application.ports.links import PublishedLinkQueries
@@ -22,6 +28,8 @@ from strata_cms.domain.value_objects import ContentId
 
 REF_KEY = "$ref"
 BLOB_KEY = "$blob"
+
+_LOGGER = logging.getLogger(__name__)
 
 _LinkKind = Literal["reference", "blob"]
 _Substitute = Callable[[_LinkKind, UUID | None], object]
@@ -77,9 +85,11 @@ class LinkResolver:
             _collect(document, ref_ids, blob_ids)
 
         targets = self._load_targets(ref_ids)
+        nested_ids: set[UUID] = set()
         for target in targets.values():
             if target.data is not None:
-                _collect(target.data, set(), blob_ids)
+                _collect(target.data, nested_ids, blob_ids)
+        visible = set(targets) | self._visible_targets(nested_ids - ref_ids)
         blobs = self._blobs.get_many(frozenset(blob_ids)) if blob_ids else {}
         paths = self._routes.paths_for(frozenset(targets)) if targets else {}
 
@@ -88,6 +98,8 @@ class LinkResolver:
                 return None
             if kind == "blob":
                 return self._descriptor(blobs.get(target_id))
+            if ContentId(target_id) not in visible:
+                return None
             return {"id": str(target_id)}
 
         def substitute(kind: _LinkKind, target_id: UUID | None) -> object:
@@ -125,8 +137,32 @@ class LinkResolver:
             except ContentTypeUnavailableError:
                 # The target's plugin is no longer installed: treat as missing.
                 continue
+            except InvalidContentDataError:
+                # One undecodable target must not fail every referencing page.
+                _LOGGER.warning(
+                    "Treating undecodable reference target %s (%s) as missing.",
+                    content_id,
+                    row.type_key,
+                )
+                continue
             targets[content_id] = _Target(row=row, title=title, data=data)
         return targets
+
+    def _visible_targets(self, ids: set[UUID]) -> set[ContentId]:
+        """Return the published, non-archived, installed ids among ``ids``."""
+        if not ids:
+            return set()
+        rows = self._queries.published_revisions(
+            frozenset(ContentId(ref_id) for ref_id in ids)
+        )
+        visible: set[ContentId] = set()
+        for content_id, row in rows.items():
+            try:
+                self._content_types.embeds_in_references(row.type_key)
+            except ContentTypeUnavailableError:
+                continue
+            visible.add(content_id)
+        return visible
 
     def _descriptor(self, blob: MediaBlob | None) -> dict[str, object] | None:
         if blob is None:
