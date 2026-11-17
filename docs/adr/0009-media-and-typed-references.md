@@ -78,7 +78,10 @@ never leaks draft state, and plugins use only public contracts.
   unless a plugin dependency is declared, and rejects a reference whose allowed
   type lacks `summary_title`.
 - Core extracts links through the `ContentTypeService` port, so plugin schemas
-  stay pure and see only raw UUIDs. No core code mentions `strata.media`.
+  stay pure and see only raw UUIDs. Link extraction, validation and Delivery
+  resolution never mention `strata.media`; the one exception is the Unfold
+  admin, which looks up `MEDIA_CONTENT_TYPE` to offer "Upload new" on picker
+  fields that accept media.
 - **Write-time validation:** every link target must exist, must not be
   archived, and must be of an allowed type (blobs must exist). Targets need not
   be published, so drafts can link to drafts.

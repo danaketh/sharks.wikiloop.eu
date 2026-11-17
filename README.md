@@ -227,6 +227,13 @@ call the real `archive_content`/`restore_content` application use cases.
 ADRs 0007-0009 describe publish readiness, Markdown rich text, and media plus
 typed content references. Operationally:
 
+- **Release / upgrade checklist:** (1) set an absolute `DJANGO_MEDIA_URL`;
+  (2) `python manage.py migrate`; (3) `python manage.py strata_rebuild_projections`
+  once, in a maintenance window, so titles, references and blob usage exist
+  for content written before these projections; (4) run the worker with
+  `python manage.py strata_worker --dispatcher strata_cms.config.services.dispatch_content_event`
+  so the published reference index stays current; (5) schedule
+  `python manage.py strata_cleanup_media` with cron (e.g. daily).
 - Media settings (`src/strata_cms/config/settings/base.py`):
   `STRATA_MEDIA_MAX_UPLOAD_BYTES` (default 20 MiB), `STRATA_MEDIA_MAX_IMAGE_PIXELS`
   (default 50,000,000 total pixels across all animation frames) and

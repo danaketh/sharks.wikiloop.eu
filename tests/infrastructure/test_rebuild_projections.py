@@ -695,3 +695,10 @@ def test_referencing_ignores_rows_of_superseded_published_revision(
     assert index.referencing(
         target.content_id, source_type=None, limit=20, offset=0
     ) == ((), 0)
+
+
+def test_command_help_warns_about_concurrent_writes() -> None:
+    help_text = " ".join(strata_rebuild_projections.Command.help.split()).lower()
+
+    assert "does not block concurrent writes" in help_text
+    assert "maintenance window" in help_text

@@ -4,6 +4,8 @@ Draft scope (titles, draft references, blob usage) is rebuilt from every
 revision; the published scope (published references) from published
 revisions. Each scope is truncated and refilled in one transaction. Links to
 content or blobs that no longer exist are skipped and listed, not fabricated.
+The rebuild does not block concurrent writes, so writes committed while it
+runs can leave stale projection rows; run it in a maintenance window.
 """
 
 from argparse import ArgumentParser
@@ -31,7 +33,11 @@ def _content_type_service() -> ContentTypeService:
 class Command(BaseCommand):
     """Truncate and refill the requested link projection scope(s)."""
 
-    help = __doc__
+    help = (
+        "Rebuild titles, reference and blob-usage projections from revisions. "
+        "Does not block concurrent writes, so writes committed while it runs "
+        "can leave stale projection rows; run it in a maintenance window."
+    )
 
     def add_arguments(self, parser: ArgumentParser) -> None:
         """Declare the scope selector."""
