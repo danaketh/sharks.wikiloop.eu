@@ -115,8 +115,9 @@ never leaks draft state, and plugins use only public contracts.
   technical metadata. All targets of a response are resolved in one batched
   query.
 - `GET /api/v1/content/{id}/referenced-by/` lists published content that
-  references the target (paginated envelope `items`, `total_count`, `limit`,
-  `offset`) and returns 404 when the target is not published.
+  references the target (the same paginated envelope as the content list:
+  `count`, `limit`, `offset`, `results`) and returns 404 when the target is
+  not published.
 - **Cache staleness:** Delivery keeps its 60 s TTL and no new invalidation was
   added. Resolved links are cached with the referencing response, so a
   referenced item's title or path, or an unpublished target, can remain visible

@@ -588,9 +588,16 @@ def _referenced_by(content_id: UUID, **params: str | int) -> dict[str, object]:
 
 
 def _item_ids(body: dict[str, object]) -> list[str]:
-    items = body["items"]
+    items = body["results"]
     assert isinstance(items, list)
     return [item["content_id"] for item in items]
+
+
+def _list_envelope_keys() -> list[str]:
+    listing = APIClient().get(reverse("api:delivery:content-list"))
+    assert listing.status_code == 200
+    body: dict[str, object] = listing.json()
+    return list(body)
 
 
 def test_referenced_by_lists_only_published_sources(
@@ -626,12 +633,12 @@ def test_referenced_by_lists_only_published_sources(
     body = _referenced_by(target.content_id)
 
     assert _item_ids(body) == [str(published_source.content_id)]
-    assert body["total_count"] == 1
+    assert body["count"] == 1
     assert body["limit"] == 20
     assert body["offset"] == 0
     listing = APIClient().get(reverse("api:delivery:content-list")).json()
     by_id = {item["content_id"]: item for item in listing["results"]}
-    items = body["items"]
+    items = body["results"]
     assert isinstance(items, list)
     assert items[0] == by_id[str(published_source.content_id)]
     assert items[0]["data"]["related"]["title"] == "Great white"
@@ -680,10 +687,11 @@ def test_referenced_by_filters_by_type(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sorted(_item_ids(profiles)) == sorted(
         [str(profile.content_id), str(many.content_id)]
     )
-    assert profiles["total_count"] == 2
+    assert profiles["count"] == 2
     assert _item_ids(guides) == [str(guide.content_id)]
-    assert unknown == {"items": [], "total_count": 0, "limit": 20, "offset": 0}
-    assert first_page["total_count"] == 3
+    assert unknown == {"count": 0, "limit": 20, "offset": 0, "results": []}
+    assert set(unknown) == set(_list_envelope_keys())
+    assert first_page["count"] == 3
     assert len(_item_ids(first_page)) == 2
     assert len(_item_ids(second_page)) == 1
     assert set(_item_ids(first_page) + _item_ids(second_page)) == {

@@ -122,7 +122,8 @@ class ContentReferencedByView(DeliveryAPIView):
     def get(self, request: Request, content_id: UUID) -> Response:
         """Return one page of referencing sources, or 404 for an unpublished target.
 
-        Items have the content list item shape; sources that are not currently
+        Uses the content list envelope (``count``/``limit``/``offset``/
+        ``results``) and item shape; sources that are not currently
         published are excluded, and an unknown ``type`` yields an empty page.
         """
         query = _parse_page_query(
@@ -148,10 +149,10 @@ class ContentReferencedByView(DeliveryAPIView):
             )
         return Response(
             {
-                "items": [_render(item) for item in page.items],
-                "total_count": page.total_count,
+                "count": page.total_count,
                 "limit": page.limit,
                 "offset": page.offset,
+                "results": [_render(item) for item in page.items],
             }
         )
 

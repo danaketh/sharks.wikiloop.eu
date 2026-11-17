@@ -243,7 +243,8 @@ typed content references. Operationally:
   rebuilds titles, reference and blob-usage projections from revisions. It does
   not block concurrent writes, so run it in a maintenance window.
 - The published reference index (used by
-  `GET /api/v1/content/{id}/referenced-by/`) is kept current by the outbox
+  `GET /api/v1/content/{id}/referenced-by/`, which returns the content list
+  envelope `count`/`limit`/`offset`/`results`) is kept current by the outbox
   worker; run `strata_worker --dispatcher strata_cms.config.services.dispatch_content_event`.
 - Delivery caches resolved references with the response (60 s TTL), so a
   referenced title, path or unpublished state may lag by up to 60 s.
