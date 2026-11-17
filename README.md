@@ -234,6 +234,11 @@ typed content references. Operationally:
   `DJANGO_MEDIA_URL` set where files live and are served. Django serves
   `MEDIA_URL` only when `DEBUG` is on; in production serve it from the web
   server or object storage and set a request-body limit at the proxy.
+  Delivery returns media URLs to a frontend on another host, so with `DEBUG`
+  off `DJANGO_MEDIA_URL` must be an absolute `http(s)://host/...` URL (system
+  check `strata.E002` fails otherwise, which also stops `migrate`). Storage
+  keys are namespaced under `media/` inside the storage root, so a URL of
+  `https://media.example.org/` yields `https://media.example.org/media/...`.
 - Uploads strip EXIF/GPS/XMP metadata by default (`preserve_original=true`
   opts out).
 - `python manage.py strata_cleanup_media` deletes media blobs that no revision

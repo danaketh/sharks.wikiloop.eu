@@ -5,6 +5,9 @@ from .base import *
 SECRET_KEY = "test-only-key-not-used-outside-test-suite"
 DEBUG = False
 ALLOWED_HOSTS = ["testserver", "localhost"]
+# Delivery consumers live on another host, so non-DEBUG settings require an
+# absolute media URL (system check strata.E002).
+MEDIA_URL = "http://testserver/media/"
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
 

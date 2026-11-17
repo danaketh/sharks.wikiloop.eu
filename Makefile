@@ -60,6 +60,7 @@ security:
 	$(RUN) pip-audit --strict -r $(AUDIT_REQUIREMENTS)
 	DJANGO_SECRET_KEY='ci-only-secret-key-please-replace-01234567890123456789' \
 	DJANGO_ALLOWED_HOSTS='example.invalid' \
+	DJANGO_MEDIA_URL='https://media.example.invalid/' \
 	DATABASE_URL='sqlite:///:memory:' \
 	DJANGO_SECURE_SSL_REDIRECT='true' \
 	DJANGO_SECURE_HSTS_SECONDS='31536000' \

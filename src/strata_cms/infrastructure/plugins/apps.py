@@ -21,4 +21,5 @@ class StrataCoreConfig(StrataPluginConfig):
 
     def ready(self) -> None:
         """Register checks only; registry compilation remains centralized/lazy."""
+        from strata_cms.infrastructure.media import checks as media_checks  # noqa: F401
         from strata_cms.infrastructure.plugins import checks  # noqa: F401
