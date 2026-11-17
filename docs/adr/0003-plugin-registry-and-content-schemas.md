@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-12
+- Amended by: ADR 0007 (definitions may add an optional `readiness` hook beside schema `validate`); ADR 0009 (link field declarations)
 
 ## Context
 

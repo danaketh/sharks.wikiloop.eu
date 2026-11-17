@@ -293,6 +293,105 @@ See `strata_cms.examples.structured_page` for a tested example containing a
 migrated text block, a nested section slot, a block-backed content type and
 recursive Delivery serialization.
 
+## Markdown fields
+
+Rich text is restricted Markdown (ADR 0008). Hold it as `MarkdownText`, validate
+it with `validate_markdown` in write validation, and normalize it on decode and
+encode so stored text is canonical:
+
+```python
+from strata_cms.plugin_api import MarkdownText, normalize_markdown, validate_markdown
+
+def deserialize(self, data):
+    return Article(body=MarkdownText(normalize_markdown(str(data.as_dict()["body"]))))
+
+def validate(self, value):
+    return validate_markdown(value.body.source, path="$.body")
+```
+
+The default profile rejects raw HTML, images, h1 and h5-h6, and allows only
+`https`, `http`, `mailto` and relative links. Pass a `MarkdownProfile` to
+`validate_markdown` for a different subset. Mark the editor field with
+`EditorInputKind.MARKDOWN`. The core `strata.rich_text` block already wraps one
+Markdown field.
+
+## Reference and blob fields
+
+Links are stored as `{"$ref": "<uuid>"}` (another content item) or
+`{"$blob": "<uuid>"}` (an uploaded file). Declare each one with a `LinkPath`
+(`[*]` means every list item) on the content type or block definition; a link
+object at an undeclared path is rejected on write:
+
+```python
+from strata_cms.plugin_api import (
+    BlobFieldDefinition,
+    ContentTypeDefinition,
+    LinkPath,
+    ReferenceFieldDefinition,
+)
+
+SPECIES = ContentTypeDefinition(
+    key=ContentTypeKey("acme_sharks.species"),
+    schema_version=1,
+    schema=SpeciesSchema(),
+    reference_fields=(
+        ReferenceFieldDefinition(
+            path=LinkPath.parse("photos"),
+            allowed_types=frozenset({ContentTypeKey("strata.media")}),
+            many=True,
+            max_items=10,
+        ),
+    ),
+    blob_fields=(BlobFieldDefinition(LinkPath.parse("cover.file")),),
+)
+```
+
+Rules:
+
+- A reference to another plugin's type requires a declared plugin dependency
+  (for `strata.media`, depend on the `strata.media` plugin), and every allowed
+  target type must define `summary_title`.
+- On write, targets must exist, not be archived, and have an allowed type;
+  they need not be published. Your schema only sees the raw `{"$ref": ...}`
+  objects.
+- `min_items` is a publish-readiness rule, not a write rule.
+- Delivery replaces each `$ref` with a summary `{id, type, title, path}` (or
+  `null`/omitted when the target is not published) and each `$blob` with a file
+  descriptor. Resolved links are cached with the response for 60 s, so titles and
+  paths may be briefly stale.
+- Editor fields: `EditorInputKind.REFERENCE` takes `reference_types`;
+  `EditorInputKind.BLOB` marks an upload target.
+
+## Publish readiness
+
+Write validation (`validate`) must accept anything that is safe to store.
+Completeness rules go in an optional `readiness` object, which `publish_content`
+runs and `create_revision` never does (ADR 0007):
+
+```python
+from strata_cms.plugin_api import ValidationIssue
+
+class ArticleReadiness:
+    def publish_issues(self, value: Article) -> tuple[ValidationIssue, ...]:
+        if value.title.strip():
+            return ()
+        return (ValidationIssue(path="$.title", message="Title is required.", code="title_required"),)
+
+ARTICLE = ContentTypeDefinition(..., readiness=ArticleReadiness())
+```
+
+Readiness must be pure. The Management API reports the current problems as
+`publish_readiness` on the latest revision.
+
+## Summaries and embedding
+
+- `summary_title=callable(value) -> str` gives a type a display title for
+  reference pickers and Delivery summaries. It is required on any type listed
+  in a `ReferenceFieldDefinition.allowed_types`.
+- `embed_in_references=True` makes Delivery include the target's own Delivery
+  payload under `data` in reference summaries, so clients need no second
+  request. `strata.media` uses it.
+
 ## Describe generic editing
 
 Editor metadata is optional and presentation-neutral. It tells Management

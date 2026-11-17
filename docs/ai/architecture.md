@@ -116,6 +116,21 @@ They are projections and must be derivable/rebuildable from authoritative
 content/revisions. Do not make a JSON revision blob the only query structure
 for indexed relational read paths.
 
+Current projections (all rebuildable from revisions; ADR 0009):
+
+- search documents and route paths (outbox/route use cases, ADR 0006);
+- draft scope, written inside the content Unit of Work: latest-draft titles
+  (`ContentTitleRecord`), draft reference rows and blob usage
+  (`MediaBlobUsageRecord`);
+- published scope, outbox-driven: published reference rows
+  (`ContentReferenceRecord`, scope `published`).
+
+`strata_rebuild_projections` rebuilds the link projections and does not block
+concurrent writes; run it in a maintenance window. Publish readiness (ADR 0007)
+is computed from the revision, never stored. Markdown (ADR 0008) and typed
+`$ref`/`$blob` links (ADR 0009) are plugin_api contracts that core handles
+without knowing any plugin schema.
+
 ## Structured blocks
 
 Structured blocks are implemented as immutable values embedded in revision JSON;

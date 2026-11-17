@@ -222,6 +222,35 @@ state; Django's own record-delete UI stays disabled (hard-deleting a
 changelist exposes "Archive selected"/"Restore selected" bulk actions that
 call the real `archive_content`/`restore_content` application use cases.
 
+## Rich text, media and references
+
+ADRs 0007-0009 describe publish readiness, Markdown rich text, and media plus
+typed content references. Operationally:
+
+- Media settings (`src/strata_cms/config/settings/base.py`):
+  `STRATA_MEDIA_MAX_UPLOAD_BYTES` (default 20 MiB), `STRATA_MEDIA_MAX_IMAGE_PIXELS`
+  (default 50,000,000 total pixels across all animation frames) and
+  `STRATA_MEDIA_ORPHAN_GRACE` (default 24 h). `DJANGO_MEDIA_ROOT` and
+  `DJANGO_MEDIA_URL` set where files live and are served. Django serves
+  `MEDIA_URL` only when `DEBUG` is on; in production serve it from the web
+  server or object storage and set a request-body limit at the proxy.
+- Uploads strip EXIF/GPS/XMP metadata by default (`preserve_original=true`
+  opts out).
+- `python manage.py strata_cleanup_media` deletes media blobs that no revision
+  uses and that are older than the grace period. It is idempotent. There is no
+  worker task for it: schedule it with cron.
+- `python manage.py strata_rebuild_projections [--scope draft|published|all]`
+  rebuilds titles, reference and blob-usage projections from revisions. It does
+  not block concurrent writes, so run it in a maintenance window.
+- The published reference index (used by
+  `GET /api/v1/content/{id}/referenced-by/`) is kept current by the outbox
+  worker; run `strata_worker --dispatcher strata_cms.config.services.dispatch_content_event`.
+- Delivery caches resolved references with the response (60 s TTL), so a
+  referenced title, path or unpublished state may lag by up to 60 s.
+- Next.js: allow the media host in `images.remotePatterns` in `next.config.js`
+  so `next/image` can load media URLs, and render Markdown with
+  `react-markdown` without raw-HTML plugins.
+
 ## CI/security
 
 The repository includes:

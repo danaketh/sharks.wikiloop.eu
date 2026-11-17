@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-12
+- Extended by: ADR 0009 (markdown, reference and blob input kinds)
 
 ## Context
 
@@ -23,6 +24,9 @@ text, textarea, slug, email, URL, integer, decimal, boolean, date/datetime,
 choice, and multi-choice inputs. Management clients are free to render these
 differently. Unsupported advanced UI needs a deliberate future extension
 contract rather than arbitrary HTML/JavaScript embedded in plugin metadata.
+ADR 0008 and ADR 0009 are the first such extension: the `markdown`,
+`reference` and `blob` input kinds are semantic hints like the scalar ones, not
+embedded UI code.
 
 Hints such as `required` and `read_only` are presentation/interaction hints
 only. They are not authorization controls and do not replace server-side schema

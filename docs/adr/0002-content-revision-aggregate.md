@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-12
+- Amended by: ADR 0007 (publishing also checks publish readiness, which `create_revision` never does)
 
 ## Context
 
