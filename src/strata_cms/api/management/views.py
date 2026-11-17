@@ -15,6 +15,8 @@ from rest_framework.views import APIView
 from strata_cms.api.errors import public_error_detail
 from strata_cms.api.management.permissions import HasStrataManagementPermission
 from strata_cms.api.management.serializers import (
+    PICKER_MAX_QUERY_INPUT,
+    PICKER_MAX_TYPES,
     AttachRouteSerializer,
     ContentLifecycleSerializer,
     CreateContentSerializer,
@@ -37,7 +39,10 @@ from strata_cms.application.content.commands import (
     PublishContent,
     RestoreContent,
 )
-from strata_cms.application.content.picker import search_picker_titles
+from strata_cms.application.content.picker import (
+    PICKER_QUERY_MAX_LENGTH,
+    search_picker_titles,
+)
 from strata_cms.application.content.results import (
     ContentLifecycleResult,
     ContentWriteResult,
@@ -166,13 +171,21 @@ class ContentCollectionView(ManagementAPIView):
                 OpenApiTypes.STR,
                 required=True,
                 many=True,
-                description="Content type key(s) to search; repeat for several.",
+                description=(
+                    "Content type key(s) to search; repeat for several "
+                    f"(at most {PICKER_MAX_TYPES})."
+                ),
             ),
             OpenApiParameter(
                 "q",
                 OpenApiTypes.STR,
                 required=False,
-                description="Case-insensitive title substring (max 200 chars).",
+                description=(
+                    "Case-insensitive title substring. Longer than "
+                    f"{PICKER_MAX_QUERY_INPUT} characters is rejected with 400; "
+                    f"after trimming only the first {PICKER_QUERY_MAX_LENGTH} "
+                    "characters are searched."
+                ),
             ),
             OpenApiParameter("limit", OpenApiTypes.INT, required=False),
             OpenApiParameter("offset", OpenApiTypes.INT, required=False),

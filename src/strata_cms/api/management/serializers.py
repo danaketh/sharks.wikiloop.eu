@@ -9,6 +9,8 @@ from strata_cms.application.errors import MEDIA_REJECTION_REASONS
 
 PICKER_MAX_LIMIT = 50
 PICKER_DEFAULT_LIMIT = 20
+PICKER_MAX_TYPES = 20
+PICKER_MAX_QUERY_INPUT = 1000
 
 
 class CreateContentSerializer(serializers.Serializer[Any]):
@@ -25,10 +27,15 @@ class PickerQuerySerializer(serializers.Serializer[Any]):
     """Validate reference-picker search parameters."""
 
     type = serializers.ListField(
-        child=serializers.CharField(max_length=200), allow_empty=False
+        child=serializers.CharField(max_length=200),
+        allow_empty=False,
+        max_length=PICKER_MAX_TYPES,
     )
     q = serializers.CharField(
-        required=False, allow_blank=True, default="", max_length=1000
+        required=False,
+        allow_blank=True,
+        default="",
+        max_length=PICKER_MAX_QUERY_INPUT,
     )
     limit = serializers.IntegerField(
         required=False,

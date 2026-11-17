@@ -563,6 +563,15 @@ def test_picker_requires_type() -> None:
     assert _picker(_staff_client(), q="x").status_code == 400
 
 
+def test_picker_caps_number_of_types() -> None:
+    client = _staff_client()
+    url = reverse("api:management:content-create")
+    many = [str(EXAMPLE_CONTENT_TYPE)] * 21
+
+    assert client.get(url, {"type": many}).status_code == 400
+    assert client.get(url, {"type": many[:20]}).status_code == 200
+
+
 def test_picker_rejects_unknown_or_malformed_type() -> None:
     client = _staff_client()
 
