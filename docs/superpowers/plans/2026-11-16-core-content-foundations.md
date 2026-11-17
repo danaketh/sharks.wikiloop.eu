@@ -114,33 +114,59 @@ def test_document_includes_publish_readiness_for_latest_revision(): ...
 
 ```python
 # tests/plugin_api/test_markdown.py
-@pytest.mark.parametrize("src", ["## Hi\n", "*a* **b** `c`\n", "- x\n- y\n", "> q\n",
-    "| a | b |\n|---|---|\n| 1 | 2 |\n", "[x](https://e.org)\n", "[x](/species/mako)\n",
-    "[m](mailto:a@b.cz)\n", "```\ncode\n```\n", "---\n"])
-def test_allowed_constructs_have_no_issues(src): assert validate_markdown(src) == ()
+@pytest.mark.parametrize(
+    "src",
+    [
+        "## Hi\n",
+        "*a* **b** `c`\n",
+        "- x\n- y\n",
+        "> q\n",
+        "| a | b |\n|---|---|\n| 1 | 2 |\n",
+        "[x](https://e.org)\n",
+        "[x](/species/mako)\n",
+        "[m](mailto:a@b.cz)\n",
+        "```\ncode\n```\n",
+        "---\n",
+    ],
+)
+def test_allowed_constructs_have_no_issues(src):
+    assert validate_markdown(src) == ()
 
-@pytest.mark.parametrize(("src", "code"), [
-    ("<b>x</b>\n", "markdown_html_not_allowed"),
-    ("x <span>y</span>\n", "markdown_html_not_allowed"),
-    ("![a](https://e.org/a.png)\n", "markdown_image_not_allowed"),
-    ("# H1\n", "markdown_heading_level_not_allowed"),
-    ("##### H5\n", "markdown_heading_level_not_allowed"),
-    ("[x](javascript:alert(1))\n", "markdown_link_scheme_not_allowed"),
-    ("[x](JaVaScRiPt:alert(1))\n", "markdown_link_scheme_not_allowed"),
-    ("[x](&#106;avascript:alert(1))\n", "markdown_link_scheme_not_allowed"),
-    ("[x](data:text/html,hi)\n", "markdown_link_scheme_not_allowed"),
-    ("<javascript:alert(1)>\n", "markdown_link_scheme_not_allowed"),
-])
-def test_disallowed_constructs(src, code): assert code in {i.code for i in validate_markdown(src)}
+
+@pytest.mark.parametrize(
+    ("src", "code"),
+    [
+        ("<b>x</b>\n", "markdown_html_not_allowed"),
+        ("x <span>y</span>\n", "markdown_html_not_allowed"),
+        ("![a](https://e.org/a.png)\n", "markdown_image_not_allowed"),
+        ("# H1\n", "markdown_heading_level_not_allowed"),
+        ("##### H5\n", "markdown_heading_level_not_allowed"),
+        ("[x](javascript:alert(1))\n", "markdown_link_scheme_not_allowed"),
+        ("[x](JaVaScRiPt:alert(1))\n", "markdown_link_scheme_not_allowed"),
+        ("[x](&#106;avascript:alert(1))\n", "markdown_link_scheme_not_allowed"),
+        ("[x](data:text/html,hi)\n", "markdown_link_scheme_not_allowed"),
+        ("<javascript:alert(1)>\n", "markdown_link_scheme_not_allowed"),
+    ],
+)
+def test_disallowed_constructs(src, code):
+    assert code in {i.code for i in validate_markdown(src)}
+
 
 def test_too_long_is_rejected(): ...  # "a" * 200_001 -> markdown_too_long
 def test_issue_paths_use_given_prefix(): ...  # path="$.body" -> issue.path == "$.body"
 @given(st.text())
-def test_normalize_is_idempotent(s): assert normalize_markdown(normalize_markdown(s)) == normalize_markdown(s)
-def test_normalize_does_not_reflow(): assert normalize_markdown("a\nb  \r\n") == "a\nb\n"
+def test_normalize_is_idempotent(s):
+    assert normalize_markdown(normalize_markdown(s)) == normalize_markdown(s)
+
+
+def test_normalize_does_not_reflow():
+    assert normalize_markdown("a\nb  \r\n") == "a\nb\n"
+
+
 @given(st.text())
 def test_preview_never_emits_raw_html_tags_from_input(s):
     assert "<script" not in render_markdown_preview(s).lower()
+
 
 # tests/contrib/test_rich_text_block.py
 def test_rich_text_block_normalizes_text_on_write(): ...  # "a  \r\n" stored as "a\n"
@@ -276,6 +302,7 @@ def test_revision_may_reference_its_own_content(): ...  # Review Focus 5
 def test_create_revision_records_projection_with_title_and_links(): ...
 def test_archive_marks_title_archived(): ...
 
+
 # tests/infrastructure/test_link_projections.py (django_db)
 def test_draft_references_replaced_on_new_revision(): ...
 def test_blob_usage_kept_for_all_revisions(): ...
@@ -324,6 +351,7 @@ def test_truncated_jpeg_rejected(): ...  # reason "media_unreadable"  (Review Fo
 def test_html_polyglot_rejected(): ...  # b"<html>..." -> media_unreadable
 def test_decompression_bomb_rejected(): ...  # header claiming 20000x20000 -> media_too_many_pixels
 
+
 # tests/api/test_media_upload.py
 def test_upload_returns_201_and_server_generated_key(): ...  # storage key ignores client filename "../../evil.php"
 def test_upload_over_limit_returns_400_media_too_large(): ...
@@ -366,7 +394,9 @@ def test_archived_target_list_item_removed(): ...
 def test_uninstalled_target_type_resolves_to_null(): ...  # Review Focus 3
 def test_embedded_target_includes_resolved_blob(): ...  # data.file.url endswith ".jpg"
 def test_nested_refs_in_embedded_data_not_expanded(): ...
-def test_fifty_references_constant_queries(django_assert_max_num_queries): ...  # Review Focus 4; <= 6 queries
+def test_fifty_references_constant_queries(
+    django_assert_max_num_queries,
+): ...  # Review Focus 4; <= 6 queries
 def test_delivery_endpoint_never_returns_draft_target_title(): ...
 ```
 
